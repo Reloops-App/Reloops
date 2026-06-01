@@ -16,7 +16,7 @@
   <h2>🎨 Open-source creative asset workspace for teams and AI agents 🤖</h2><br />
   Reloops: An alternative to Brandfolder, Bynder, Canto, Frame.io, Dropbox Replay, Ziflow, Filestage, and internal DAM tools.<br /><br />
   </strong>
-  Reloops gives you everything you need to organize creative assets,<br />manage versions, collect approvals, enrich metadata, share collections, and let agents work inside your media library.
+  Reloops gives you everything you need to organize creative assets,<br />manage versions, collect approvals, share collections, and use AI to generate searchable descriptions and tags.
 </div>
 
 <div class="flex" align="center">
@@ -25,7 +25,7 @@
   &nbsp;·&nbsp;
   <strong>Collections</strong>
   &nbsp;·&nbsp;
-  <strong>Metadata</strong>
+  <strong>AI Tags</strong>
   &nbsp;·&nbsp;
   <strong>Search</strong>
   &nbsp;·&nbsp;
@@ -114,9 +114,9 @@ Move assets from needs review to approved with project-level workflow boards, pr
   <img alt="Reloops project workflow" src="docs/assets/reloops-kanban-workflow.png" />
 </p>
 
-### Turn media into searchable knowledge
+### Let AI describe and tag every asset
 
-Generate descriptions and tags so creative assets become searchable, reusable, and easier for agents to understand.
+Reloops can analyze creative assets and generate smart descriptions and tags, turning raw media into searchable DAM metadata your team and agents can actually use.
 
 <p align="center">
   <img alt="Reloops smart metadata" src="docs/assets/reloops-smart-metadata.png" />
@@ -158,10 +158,10 @@ Manage organization members, project reviewers, asset assignees, guest feedback,
 
 - Organize every campaign asset in a self-hosted creative DAM.
 - Move assets through project workflows from needs review to approved.
-- Search by name, type, folder path, status, tags, people, dates, usage fields, and AI-generated metadata.
+- Search by name, type, folder path, status, people, dates, usage fields, AI-generated descriptions, and AI-generated tags.
 - Manage versions, approvals, share links, and guest review feedback without losing asset history.
 - Build dynamic collections for campaigns, clients, teams, launches, and reusable asset groups.
-- Track review activity, file updates, mentions, and smart metadata jobs from a notification center.
+- Track review activity, file updates, mentions, and AI metadata jobs from a notification center.
 - Manage team members, reviewers, roles, asset assignees, and guest feedback in the same workspace.
 - Use in-app notifications and email-ready notification preferences for review requests, approvals, changes requested, mentions, replies, and guest feedback.
 - Invite humans and agents into the same creative workspace.
@@ -173,7 +173,7 @@ Manage organization members, project reviewers, asset assignees, guest feedback,
 - Human teammates, reviewers, and API-key agents can all be assigned asset work.
 - Agents can list and create workspaces and projects.
 - Agents can fetch assets, patch asset status, create comments, and manage share links.
-- The local asset intelligence worker can generate smart descriptions and tags.
+- The local asset intelligence worker uses AI to generate smart descriptions and tags for assets.
 - Generated media can flow back into the same library, collection, review, and approval loop.
 
 ## Tech Stack
@@ -183,7 +183,7 @@ Manage organization members, project reviewers, asset assignees, guest feedback,
 - **Backend:** Supabase Auth, Postgres, Storage, Row Level Security, and Edge Functions
 - **Data model:** organizations, workspaces, projects, assets, folders, collections, share links, comments, notifications, API keys, and asset intelligence jobs
 - **Agent layer:** scoped API-key actors for external tools, workflow automation, and AI agents
-- **AI metadata:** local Node asset intelligence worker with DB queue polling
+- **AI metadata:** local Node asset intelligence worker that generates smart descriptions and smart tags with DB queue polling
 - **Local runtime:** Docker-powered Supabase stack with web app, Edge Functions, and worker processes
 
 ## Quick Start
@@ -197,7 +197,7 @@ This repository is the open-source, self-hosted version of Reloops.
 * Included in OSS:
   - Supabase Auth, Postgres, Storage, and Edge Functions
   - Workspaces, teams, projects, folders, assets, versions, comments, reviews, assignments, and notifications
-  - DAM search, collections, metadata filtering, smart metadata fields, share links, and guest comments
+  - DAM search, collections, metadata filtering, AI-generated smart descriptions and tags, share links, and guest comments
   - API-key agent endpoints for controlled automation inside workspaces
   - Local asset intelligence worker with DB queue polling
   - Local-first setup for running the full product on your machine or own infrastructure
@@ -205,7 +205,7 @@ This repository is the open-source, self-hosted version of Reloops.
 * Storage and capture model:
   - Uploads use Supabase Storage.
   - Website review works with uploaded or captured screenshots.
-  - Asset intelligence runs locally through the worker unless you connect your own production worker setup.
+  - Asset intelligence runs locally through the worker to generate smart descriptions and tags unless you connect your own production worker setup.
 
 ## License
 
