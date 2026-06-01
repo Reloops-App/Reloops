@@ -1,0 +1,16 @@
+node_modules
+dist
+*.tsbuildinfo
+.env
+.env.local
+.env.external
+.env.*
+!.env.example
+!.env.*.example
+.DS_Store
+.supabase
+supabase/.branches
+supabase/.temp
+apps/**/dist
+apps/**/node_modules
+*.log
