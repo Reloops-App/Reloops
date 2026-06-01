@@ -75,7 +75,7 @@
 
 ## ✨ Features
 
-### Find any asset instantly
+### 🔎 Find any asset instantly
 
 Search across folders, tags, metadata, status, people, smart descriptions, dates, formats, and version stacks from one focused DAM surface.
 
@@ -83,7 +83,7 @@ Search across folders, tags, metadata, status, people, smart descriptions, dates
   <img alt="Reloops digital asset search" src="docs/assets/reloops-dam-search.png" />
 </p>
 
-### Move creative work from review to approved
+### ✅ Move creative work from review to approved
 
 Run campaigns through a visual workflow board with upload, folders, filters, bulk selection, review states, assignees, and progress tracking.
 
@@ -91,7 +91,7 @@ Run campaigns through a visual workflow board with upload, folders, filters, bul
   <img alt="Reloops project workflow" src="docs/assets/reloops-kanban-workflow.png" />
 </p>
 
-### Let AI write searchable metadata
+### 🤖 Let AI write searchable metadata
 
 Reloops analyzes creative assets and generates useful descriptions and tags, so teams and agents can find the right media without manual cataloging.
 
@@ -99,7 +99,7 @@ Reloops analyzes creative assets and generates useful descriptions and tags, so 
   <img alt="Reloops smart metadata" src="docs/assets/reloops-smart-metadata.png" />
 </p>
 
-### Publish client-ready collections
+### 🌌 Publish client-ready collections
 
 Turn selected assets into polished collections with download access, search, creator context, and a focused browsing experience.
 
@@ -107,7 +107,7 @@ Turn selected assets into polished collections with download access, search, cre
   <img alt="Reloops published collection" src="docs/assets/reloops-published-collection.png" />
 </p>
 
-### Share work without losing control
+### 🔗 Share work without losing control
 
 Create locked share links with expiration, download permissions, comment permissions, and collection-level access rules.
 
@@ -115,7 +115,7 @@ Create locked share links with expiration, download permissions, comment permiss
   <img alt="Reloops share link controls" src="docs/assets/reloops-share-link.png" />
 </p>
 
-### Collect guest feedback without onboarding
+### 💬 Collect guest feedback without onboarding
 
 External reviewers can identify themselves, view shared assets, leave comments, and participate in review without joining the whole workspace.
 
@@ -123,7 +123,7 @@ External reviewers can identify themselves, view shared assets, leave comments, 
   <img alt="Reloops guest review" src="docs/assets/reloops-guest-review.png" />
 </p>
 
-### Compare versions side by side
+### 🎬 Compare versions side by side
 
 Review old and new cuts together, keep timestamped comments attached to the right version, and upload the next pass from the same screen.
 
@@ -131,7 +131,7 @@ Review old and new cuts together, keep timestamped comments attached to the righ
   <img alt="Reloops version comparison" src="docs/assets/reloops-compare-versions.png" />
 </p>
 
-### Invite agents into the DAM
+### 🔑 Invite agents into the DAM
 
 Create developer keys for OpenClaw, OpenAI, Claude, Gemini, Zapier, n8n, Replicate, Runway, and custom agents so automation can operate inside the asset system.
 
@@ -139,7 +139,7 @@ Create developer keys for OpenClaw, OpenAI, Claude, Gemini, Zapier, n8n, Replica
   <img alt="Reloops agent and developer keys" src="docs/assets/reloops-agent-keys.png" />
 </p>
 
-### Manage teammates, reviewers, and agents
+### 👥 Manage teammates, reviewers, and agents
 
 Keep organization members, roles, pending invites, project reviewers, and API-key agents in one admin workspace.
 
@@ -147,7 +147,7 @@ Keep organization members, roles, pending invites, project reviewers, and API-ke
   <img alt="Reloops team and agent registry" src="docs/assets/reloops-agent-key-registry.png" />
 </p>
 
-### Assign review work to humans or agents
+### 🧠 Assign review work to humans or agents
 
 Keep the full decision thread on the asset, assign the next pass to an agent like OpenClaw, and let the agent reply beside the team.
 
@@ -155,7 +155,7 @@ Keep the full decision thread on the asset, assign the next pass to an agent lik
   <img alt="Reloops agent review thread" src="docs/assets/reloops-agent-review-thread.png" />
 </p>
 
-### Keep every review event visible
+### 🔔 Keep every review event visible
 
 Track feedback, mentions, file updates, review activity, and AI metadata jobs from one notification center.
 
@@ -165,18 +165,18 @@ Track feedback, mentions, file updates, review activity, and AI metadata jobs fr
 
 # Intro
 
-- Organize every campaign asset in a self-hosted creative DAM.
-- Search across folders, tags, metadata, statuses, people, dates, formats, and version stacks.
-- Use AI to generate smart descriptions and tags for images, videos, screenshots, and other creative assets.
-- Move assets through project workflows from needs review to approved.
-- Manage versions, comments, assignments, reviewers, approvals, share links, and guest feedback.
-- Assign review work to humans or agents and keep the full decision thread on the asset.
-- Build dynamic collections for campaigns, clients, teams, launches, and reusable asset groups.
-- Invite team members to collaborate, comment, review, and approve assets.
-- Let AI agents and workflow tools create projects, fetch assets, comment, enrich metadata, and manage shares.
-- Perfect for automation with platforms like n8n, Make, Zapier, OpenClaw, and custom agents.
+- 🗂️ Organize every campaign asset in a self-hosted creative DAM.
+- 🔎 Search across folders, tags, metadata, statuses, people, dates, formats, and version stacks.
+- 🤖 Use AI to generate smart descriptions and tags for images, videos, screenshots, and other creative assets.
+- ✅ Move assets through project workflows from needs review to approved.
+- 💬 Manage versions, comments, assignments, reviewers, approvals, share links, and guest feedback.
+- 🧠 Assign review work to humans or agents and keep the full decision thread on the asset.
+- 🌌 Build dynamic collections for campaigns, clients, teams, launches, and reusable asset groups.
+- 👥 Invite team members to collaborate, comment, review, and approve assets.
+- 🔌 Let AI agents and workflow tools create projects, fetch assets, comment, enrich metadata, and manage shares.
+- ⚡ Perfect for automation with platforms like n8n, Make, Zapier, OpenClaw, and custom agents.
 
-## Alternative To
+## 🔁 Alternative To
 
 Reloops is a DAM-first product. Review and approval are built in because creative assets do not stop at storage.
 
@@ -189,34 +189,34 @@ Reloops is a DAM-first product. Review and approval are built in because creativ
 | Zapier, n8n, Make, custom agents | Controlled API actors that can participate directly in asset operations |
 | Internal DAM tools | Auth, storage, asset views, review UI, share links, API keys, and local workers already wired together |
 
-## Agent-ready DAM
+## 🤖 Agent-ready DAM
 
-- API-key actors can operate inside organization workspaces.
-- Human teammates, reviewers, and API-key agents can all be assigned asset work.
-- Agents can receive review assignments and reply in the same comment thread as the team.
-- Agents can list and create workspaces and projects.
-- Agents can fetch assets, patch asset status, create comments, and manage share links.
-- The local asset intelligence worker uses AI to generate smart descriptions and tags for assets.
-- Generated media can flow back into the same library, collection, review, and approval loop.
+- 🔑 API-key actors can operate inside organization workspaces.
+- 👥 Human teammates, reviewers, and API-key agents can all be assigned asset work.
+- 💬 Agents can receive review assignments and reply in the same comment thread as the team.
+- 🗂️ Agents can list and create workspaces and projects.
+- 🔌 Agents can fetch assets, patch asset status, create comments, and manage share links.
+- 🤖 The local asset intelligence worker uses AI to generate smart descriptions and tags for assets.
+- 🔁 Generated media can flow back into the same library, collection, review, and approval loop.
 
-## Tech Stack
+## 🧱 Tech Stack
 
-- Pnpm workspaces
-- Vite + React + TypeScript
-- Supabase Auth, Postgres, Storage, RLS, and Edge Functions
-- Node asset intelligence worker
-- API-key agent layer
-- Docker for local Supabase services
+- 📦 Pnpm workspaces
+- ⚛️ Vite + React + TypeScript
+- 🟢 Supabase Auth, Postgres, Storage, RLS, and Edge Functions
+- 🤖 Node asset intelligence worker
+- 🔑 API-key agent layer
+- 🐳 Docker for local Supabase services
 
-## Quick Start
+## 🚀 Quick Start
 
 To have the project up and running, please follow the [Local Setup Guide](docs/SETUP.md).
 
-## Self-hosted OSS
+## 🏠 Self-hosted OSS
 
 This repository is the open-source, self-hosted version of Reloops.
 
-* Included in OSS:
+* ✅ Included in OSS:
   - Supabase Auth, Postgres, Storage, and Edge Functions
   - Workspaces, teams, projects, folders, assets, versions, comments, reviews, assignments, and notifications
   - DAM search, collections, metadata filtering, AI-generated smart descriptions and tags, share links, and guest comments
@@ -224,18 +224,18 @@ This repository is the open-source, self-hosted version of Reloops.
   - Local asset intelligence worker with DB queue polling
   - Local-first setup for running the full product on your machine or own infrastructure
 
-* Not included in this OSS package:
+* ⚠️ Not included in this OSS package:
   - Hosted billing and managed subscription infrastructure
   - Hosted cloud storage integrations beyond local Supabase Storage defaults
   - Hosted workers, QStash, Cloudflare Workers, and commercial deployment infrastructure
   - Managed analytics and managed screenshot capture
   - Managed email delivery; local OSS includes notification data/preferences and local invite handling, but production email delivery is expected to be wired by the self-hosting team
 
-* Storage and capture model:
+* 🗄️ Storage and capture model:
   - Uploads use Supabase Storage.
   - Website review works with uploaded or captured screenshots.
   - Asset intelligence runs locally through the worker to generate smart descriptions and tags unless you connect your own production worker setup.
 
-## License
+## 📄 License
 
 This repository's source code is available under the [AGPL-3.0 license](LICENSE).
