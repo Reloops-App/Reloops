@@ -178,11 +178,13 @@ Manage organization members, project reviewers, asset assignees, guest feedback,
 
 ## Tech Stack
 
-- Pnpm workspaces
-- Vite + React
-- Supabase Auth, Postgres, Storage, and Edge Functions
-- Node asset intelligence worker
-- Docker for local Supabase services
+- **Monorepo:** pnpm workspaces
+- **Frontend:** Vite, React, TypeScript, Tailwind-style component UI
+- **Backend:** Supabase Auth, Postgres, Storage, Row Level Security, and Edge Functions
+- **Data model:** organizations, workspaces, projects, assets, folders, collections, share links, comments, notifications, API keys, and asset intelligence jobs
+- **Agent layer:** scoped API-key actors for external tools, workflow automation, and AI agents
+- **AI metadata:** local Node asset intelligence worker with DB queue polling
+- **Local runtime:** Docker-powered Supabase stack with web app, Edge Functions, and worker processes
 
 ## Quick Start
 
@@ -190,13 +192,20 @@ To have the project up and running, please follow the [Local Setup Guide](docs/S
 
 ## Self-hosted OSS
 
-- Supabase Auth, Postgres, Storage, and Edge Functions
-- Workspaces, teams, projects, folders, assets, versions, comments, and reviews
-- Collections, metadata filtering, share links, and guest comments
-- API-key agent endpoints
-- Local asset intelligence worker with DB queue polling
+This repository is the open-source, self-hosted version of Reloops.
 
-Reloops OSS does not include hosted billing, hosted cloud storage integrations, hosted workers, analytics, QStash, Cloudflare Workers, commercial deployment infrastructure, or managed screenshot capture. Uploads use Supabase Storage, and website review works with uploaded or captured screenshots.
+* Included in OSS:
+  - Supabase Auth, Postgres, Storage, and Edge Functions
+  - Workspaces, teams, projects, folders, assets, versions, comments, reviews, assignments, and notifications
+  - DAM search, collections, metadata filtering, smart metadata fields, share links, and guest comments
+  - API-key agent endpoints for controlled automation inside workspaces
+  - Local asset intelligence worker with DB queue polling
+  - Local-first setup for running the full product on your machine or own infrastructure
+
+* Storage and capture model:
+  - Uploads use Supabase Storage.
+  - Website review works with uploaded or captured screenshots.
+  - Asset intelligence runs locally through the worker unless you connect your own production worker setup.
 
 ## License
 
