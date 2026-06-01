@@ -1,6 +1,6 @@
 <p align="center">
   <picture>
-    <img alt="Reloops Logo" src="docs/assets/reloops-logo.png" width="220"/>
+    <img alt="Reloops Logo" src="docs/assets/reloops-logo.png" width="280"/>
   </picture>
 </p>
 
@@ -13,23 +13,23 @@
 <h3 align="center"><strong><a href="docs/SETUP.md">NEW: run the open-source Reloops DAM locally in minutes</a></strong></h3>
 <div align="center">
   <strong>
-  <h2>🎨 Open-source creative asset workspace for teams and AI agents 🤖</h2><br />
-  Reloops: An alternative to Brandfolder, Bynder, Canto, Frame.io, Dropbox Replay, Ziflow, Filestage, and internal DAM tools.<br /><br />
+  <h2>Your open-source creative asset workspace for teams and AI agents</h2><br />
+  Reloops: An alternative to Brandfolder, Bynder, Canto, Frame.io, Dropbox Replay, Ziflow, Filestage, Google Drive, Airtable, and internal DAM tools.<br /><br />
   </strong>
-  Reloops gives you everything you need to organize creative assets,<br />manage versions, collect approvals, share collections, and use AI to generate searchable descriptions and tags.
+  Reloops offers everything you need to organize creative assets,<br />generate AI descriptions and tags, manage versions, collect approvals, share collections, and let agents work inside your media library.
 </div>
 
 <div class="flex" align="center">
   <br />
   <strong>DAM</strong>
   &nbsp;·&nbsp;
-  <strong>Collections</strong>
-  &nbsp;·&nbsp;
-  <strong>AI Tags</strong>
+  <strong>AI Metadata</strong>
   &nbsp;·&nbsp;
   <strong>Search</strong>
   &nbsp;·&nbsp;
-  <strong>Versions</strong>
+  <strong>Collections</strong>
+  &nbsp;·&nbsp;
+  <strong>Review</strong>
   &nbsp;·&nbsp;
   <strong>Approvals</strong>
   &nbsp;·&nbsp;
@@ -53,7 +53,7 @@
   ·
   <a href="#features">Features</a>
   ·
-  <a href="#a-modern-alternative-to-closed-dam-and-creative-review-tools">Alternative To</a>
+  <a href="#alternative-to">Alternative To</a>
   ·
   <a href="#tech-stack">Tech Stack</a><br />
 </p>
@@ -66,29 +66,6 @@
 </p>
 
 <br /><br />
-
-## A modern alternative to closed DAM and creative review tools
-
-Reloops is a DAM-first product. Review and approval are built in because assets do not stop at storage.
-
-| If you are using... | Reloops helps you replace or extend it with... |
-|---------------------|-----------------------------------------------|
-| Brandfolder, Bynder, Canto | A self-hosted creative DAM for projects, collections, metadata, search, and asset history |
-| Google Drive, Dropbox, Notion, Airtable | A purpose-built asset workspace instead of folders, rows, and scattered comments |
-| Frame.io, Dropbox Replay, Wipster | Asset review, comments, version stacks, approvals, and share links inside the DAM |
-| Ziflow, Filestage, ReviewStudio | Structured creative feedback without a heavyweight enterprise approval suite |
-| Zapier, n8n, Make, custom agents | Controlled API actors that can create projects, fetch assets, comment, enrich metadata, and manage shares |
-| A custom internal DAM | Auth, storage, asset views, review UI, share links, API keys, and local workers already wired together |
-
-## Built for real collaboration
-
-| Collaboration need | What Reloops gives you |
-|--------------------|------------------------|
-| Team access | Organization members, workspace roles, project reviewers, and invite flows |
-| Clear ownership | Asset assignees for humans and API-key agents |
-| Review routing | Review requested, approved, changes requested, overdue, mention, reply, and guest feedback events |
-| Notification control | In-app notifications plus email-ready notification preferences by event type |
-| Guest participation | External reviewers can identify themselves, comment, and leave feedback from share links |
 
 ## 🔌 See the leading Reloops features
 
@@ -106,49 +83,81 @@ Search across folders, tags, metadata, status, people, smart descriptions, dates
   <img alt="Reloops digital asset search" src="docs/assets/reloops-dam-search.png" />
 </p>
 
-### Keep every campaign moving
+### Move creative work from review to approved
 
-Move assets from needs review to approved with project-level workflow boards, progress indicators, filters, bulk selection, upload, share, and download actions.
+Run campaigns through a visual workflow board with upload, folders, filters, bulk selection, review states, assignees, and progress tracking.
 
 <p align="center">
   <img alt="Reloops project workflow" src="docs/assets/reloops-kanban-workflow.png" />
 </p>
 
-### Let AI describe and tag every asset
+### Let AI write searchable metadata
 
-Reloops can analyze creative assets and generate smart descriptions and tags, turning raw media into searchable DAM metadata your team and agents can actually use.
+Reloops analyzes creative assets and generates useful descriptions and tags, so teams and agents can find the right media without manual cataloging.
 
 <p align="center">
   <img alt="Reloops smart metadata" src="docs/assets/reloops-smart-metadata.png" />
 </p>
 
-### Publish collections clients can actually use
+### Publish client-ready collections
 
-Package campaign assets into branded collections that can be browsed, searched, downloaded, and shared without exposing the whole workspace.
+Turn selected assets into polished collections with download access, search, creator context, and a focused browsing experience.
 
 <p align="center">
   <img alt="Reloops published collection" src="docs/assets/reloops-published-collection.png" />
 </p>
 
-### Share review links without losing control
+### Share work without losing control
 
-Create controlled asset or collection links with download permissions, comments, locked item sets, and expiration settings.
+Create locked share links with expiration, download permissions, comment permissions, and collection-level access rules.
 
 <p align="center">
   <img alt="Reloops share link controls" src="docs/assets/reloops-share-link.png" />
 </p>
 
+### Collect guest feedback without onboarding
+
+External reviewers can identify themselves, view shared assets, leave comments, and participate in review without joining the whole workspace.
+
+<p align="center">
+  <img alt="Reloops guest review" src="docs/assets/reloops-guest-review.png" />
+</p>
+
+### Compare versions side by side
+
+Review old and new cuts together, keep timestamped comments attached to the right version, and upload the next pass from the same screen.
+
+<p align="center">
+  <img alt="Reloops version comparison" src="docs/assets/reloops-compare-versions.png" />
+</p>
+
 ### Invite agents into the DAM
 
-Create developer keys for OpenClaw, OpenAI, Claude, Gemini, Zapier, n8n, Replicate, Runway, and custom agents so automation can operate inside your creative asset system.
+Create developer keys for OpenClaw, OpenAI, Claude, Gemini, Zapier, n8n, Replicate, Runway, and custom agents so automation can operate inside the asset system.
 
 <p align="center">
   <img alt="Reloops agent and developer keys" src="docs/assets/reloops-agent-keys.png" />
 </p>
 
-### Coordinate teams, reviewers, and assignments
+### Manage teammates, reviewers, and agents
 
-Manage organization members, project reviewers, asset assignees, guest feedback, mentions, and review activity from the same workspace. Reloops keeps human responsibility attached to the asset, not buried in chat.
+Keep organization members, roles, pending invites, project reviewers, and API-key agents in one admin workspace.
+
+<p align="center">
+  <img alt="Reloops team and agent registry" src="docs/assets/reloops-agent-key-registry.png" />
+</p>
+
+### Assign review work to humans or agents
+
+Keep the full decision thread on the asset, assign the next pass to an agent like OpenClaw, and let the agent reply beside the team.
+
+<p align="center">
+  <img alt="Reloops agent review thread" src="docs/assets/reloops-agent-review-thread.png" />
+</p>
+
+### Keep every review event visible
+
+Track feedback, mentions, file updates, review activity, and AI metadata jobs from one notification center.
 
 <p align="center">
   <img alt="Reloops notifications" src="docs/assets/reloops-notifications.png" />
@@ -157,20 +166,34 @@ Manage organization members, project reviewers, asset assignees, guest feedback,
 # Intro
 
 - Organize every campaign asset in a self-hosted creative DAM.
+- Search across folders, tags, metadata, statuses, people, dates, formats, and version stacks.
+- Use AI to generate smart descriptions and tags for images, videos, screenshots, and other creative assets.
 - Move assets through project workflows from needs review to approved.
-- Search by name, type, folder path, status, people, dates, usage fields, AI-generated descriptions, and AI-generated tags.
-- Manage versions, approvals, share links, and guest review feedback without losing asset history.
+- Manage versions, comments, assignments, reviewers, approvals, share links, and guest feedback.
+- Assign review work to humans or agents and keep the full decision thread on the asset.
 - Build dynamic collections for campaigns, clients, teams, launches, and reusable asset groups.
-- Track review activity, file updates, mentions, and AI metadata jobs from a notification center.
-- Manage team members, reviewers, roles, asset assignees, and guest feedback in the same workspace.
-- Use in-app notifications and email-ready notification preferences for review requests, approvals, changes requested, mentions, replies, and guest feedback.
-- Invite humans and agents into the same creative workspace.
-- Perfect for automation with platforms like n8n, Make, Zapier, OpenClaw, custom agents, and internal workflows.
+- Invite team members to collaborate, comment, review, and approve assets.
+- Let AI agents and workflow tools create projects, fetch assets, comment, enrich metadata, and manage shares.
+- Perfect for automation with platforms like n8n, Make, Zapier, OpenClaw, and custom agents.
+
+## Alternative To
+
+Reloops is a DAM-first product. Review and approval are built in because creative assets do not stop at storage.
+
+| If you are using... | Reloops helps you replace or extend it with... |
+|---------------------|-----------------------------------------------|
+| Brandfolder, Bynder, Canto | Self-hosted creative DAM, collections, metadata, search, and asset history |
+| Google Drive, Dropbox, Notion, Airtable | Purpose-built asset workspaces instead of folders, rows, and scattered comments |
+| Frame.io, Dropbox Replay, Wipster | Review, comments, version stacks, approvals, and share links inside the DAM |
+| Ziflow, Filestage, ReviewStudio | Structured creative feedback without a heavyweight enterprise approval suite |
+| Zapier, n8n, Make, custom agents | Controlled API actors that can participate directly in asset operations |
+| Internal DAM tools | Auth, storage, asset views, review UI, share links, API keys, and local workers already wired together |
 
 ## Agent-ready DAM
 
 - API-key actors can operate inside organization workspaces.
 - Human teammates, reviewers, and API-key agents can all be assigned asset work.
+- Agents can receive review assignments and reply in the same comment thread as the team.
 - Agents can list and create workspaces and projects.
 - Agents can fetch assets, patch asset status, create comments, and manage share links.
 - The local asset intelligence worker uses AI to generate smart descriptions and tags for assets.
@@ -178,13 +201,12 @@ Manage organization members, project reviewers, asset assignees, guest feedback,
 
 ## Tech Stack
 
-- **Monorepo:** pnpm workspaces
-- **Frontend:** Vite, React, TypeScript, Tailwind-style component UI
-- **Backend:** Supabase Auth, Postgres, Storage, Row Level Security, and Edge Functions
-- **Data model:** organizations, workspaces, projects, assets, folders, collections, share links, comments, notifications, API keys, and asset intelligence jobs
-- **Agent layer:** scoped API-key actors for external tools, workflow automation, and AI agents
-- **AI metadata:** local Node asset intelligence worker that generates smart descriptions and smart tags with DB queue polling
-- **Local runtime:** Docker-powered Supabase stack with web app, Edge Functions, and worker processes
+- Pnpm workspaces
+- Vite + React + TypeScript
+- Supabase Auth, Postgres, Storage, RLS, and Edge Functions
+- Node asset intelligence worker
+- API-key agent layer
+- Docker for local Supabase services
 
 ## Quick Start
 
@@ -201,6 +223,13 @@ This repository is the open-source, self-hosted version of Reloops.
   - API-key agent endpoints for controlled automation inside workspaces
   - Local asset intelligence worker with DB queue polling
   - Local-first setup for running the full product on your machine or own infrastructure
+
+* Not included in this OSS package:
+  - Hosted billing and managed subscription infrastructure
+  - Hosted cloud storage integrations beyond local Supabase Storage defaults
+  - Hosted workers, QStash, Cloudflare Workers, and commercial deployment infrastructure
+  - Managed analytics and managed screenshot capture
+  - Managed email delivery; local OSS includes notification data/preferences and local invite handling, but production email delivery is expected to be wired by the self-hosting team
 
 * Storage and capture model:
   - Uploads use Supabase Storage.
