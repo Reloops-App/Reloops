@@ -1,0 +1,25 @@
+services:
+  asset-intelligence-worker:
+    build:
+      context: .
+      dockerfile: apps/asset-intelligence-worker/Dockerfile
+    env_file:
+      - .env
+    environment:
+      SUPABASE_URL: http://host.docker.internal:56321
+      ASSET_SOURCE_BASE_URL: http://host.docker.internal:56321/storage/v1/object/public/assets
+      ASSET_AI_PROVIDER: ${ASSET_AI_PROVIDER:-mock}
+      ASSET_AI_MODEL: ${ASSET_AI_MODEL:-gpt-4.1-mini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ASSET_AI_WORKER_ID: ${ASSET_AI_WORKER_ID:-asset-ai-docker}
+      ASSET_AI_POLL_INTERVAL_MS: ${ASSET_AI_POLL_INTERVAL_MS:-5000}
+      ASSET_AI_LEASE_SECONDS: ${ASSET_AI_LEASE_SECONDS:-300}
+      ASSET_AI_MAX_CONCURRENT_JOBS: ${ASSET_AI_MAX_CONCURRENT_JOBS:-1}
+      ASSET_AI_OPENAI_TIMEOUT_MS: ${ASSET_AI_OPENAI_TIMEOUT_MS:-60000}
+      ASSET_AI_FFMPEG_TIMEOUT_MS: ${ASSET_AI_FFMPEG_TIMEOUT_MS:-30000}
+      ASSET_AI_FFPROBE_TIMEOUT_MS: ${ASSET_AI_FFPROBE_TIMEOUT_MS:-10000}
+      ASSET_AI_MAX_VIDEO_FRAMES: ${ASSET_AI_MAX_VIDEO_FRAMES:-3}
+      ASSET_AI_VIDEO_FRAME_WIDTH: ${ASSET_AI_VIDEO_FRAME_WIDTH:-720}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

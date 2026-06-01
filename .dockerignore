@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+node_modules
+**/node_modules
+**/dist
+supabase/.temp
+supabase/.branches
+apps/web/public/pdf.worker.min.mjs
+npm-debug.log
+pnpm-debug.log

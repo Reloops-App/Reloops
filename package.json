@@ -1,0 +1,31 @@
+{
+  "name": "reloops-oss",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "packageManager": "pnpm@10.13.1",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "sync-env": "node scripts/sync-env.mjs",
+    "start": "sh scripts/dev-all.sh",
+    "dev": "pnpm --filter @reloops/web dev --host 127.0.0.1 --port 6173",
+    "dev:all": "sh scripts/dev-all.sh",
+    "supabase:start": "sh scripts/supabase-cli.sh start",
+    "supabase:reset": "sh scripts/supabase-cli.sh db reset",
+    "supabase:share": "sh scripts/supabase-cli.sh functions serve share --env-file .env",
+    "supabase:functions": "sh scripts/supabase-cli.sh functions serve --env-file .env",
+    "worker:asset-intelligence": "pnpm --filter @reloops/asset-intelligence-worker dev",
+    "docker:asset-intelligence": "sh scripts/docker-asset-intelligence-worker.sh",
+    "ai:requeue": "node scripts/requeue-asset-intelligence.mjs",
+    "build": "pnpm --filter @reloops/web build",
+    "lint": "pnpm --filter @reloops/web lint",
+    "typecheck": "pnpm --filter @reloops/web typecheck && pnpm --filter @reloops/asset-intelligence-worker build",
+    "test": "pnpm typecheck && pnpm build && node scripts/smoke-test.mjs && node scripts/collections-ui-regression.mjs",
+    "test:runtime": "node scripts/runtime-smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "~5.8.2"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.106.2"
+  }
+}

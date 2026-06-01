@@ -1,0 +1,49 @@
+project_id = "reloops-oss"
+
+[api]
+enabled = true
+port = 56321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 56322
+shadow_port = 56320
+major_version = 15
+
+[studio]
+enabled = true
+port = 56323
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:6173"
+additional_redirect_urls = ["http://127.0.0.1:6173", "http://localhost:6173"]
+enable_signup = true
+
+[storage]
+enabled = true
+file_size_limit = "2GiB"
+
+[analytics]
+enabled = true
+port = 56327
+
+[inbucket]
+enabled = true
+port = 56324
+smtp_port = 56325
+pop3_port = 56326
+
+[db.pooler]
+enabled = false
+port = 56329
+
+[edge_runtime]
+enabled = true
+inspector_port = 56328
+policy = "oneshot"
+
+[functions.share]
+verify_jwt = false

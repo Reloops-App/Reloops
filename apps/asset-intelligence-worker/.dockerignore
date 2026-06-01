@@ -1,0 +1,5 @@
+dist
+node_modules
+.env.local
+npm-debug.log
+pnpm-debug.log
