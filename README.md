@@ -53,7 +53,7 @@
   ·
   <a href="#features">Features</a>
   ·
-  <a href="#alternative-to">Alternative To</a>
+  <a href="#a-modern-alternative-to-closed-dam-and-creative-review-tools">Alternative To</a>
   ·
   <a href="#tech-stack">Tech Stack</a><br />
 </p>
@@ -67,40 +67,7 @@
 
 <br /><br />
 
-## 🔌 See the leading Reloops features
-
-<p align="center">
-  <img alt="Reloops creative asset workspace" src="docs/assets/reloops-workspace.png" />
-</p>
-
-## ✨ Features
-
-| ![Project Kanban workflow](docs/assets/reloops-kanban-workflow.png) | ![Digital asset search](docs/assets/reloops-dam-search.png) |
-| --------------------------------------------------------------- | ------------------------------------------------------------------ |
-| **Project workflow**<br />Move assets through no status, needs review, in review, and approved states with project-level progress. | **Digital asset search**<br />Search by names, types, folder paths, statuses, dates, tags, metadata, and version stacks from one DAM surface. |
-| ![Creative asset workspace](docs/assets/reloops-workspace.png) | ![Published collection](docs/assets/reloops-published-collection.png) |
-| **Creative asset review**<br />Preview media, collect comments, request revisions, approve work, and export markers. | **Published collections**<br />Package campaign assets into branded collections that can be browsed, searched, and downloaded. |
-| ![Smart metadata](docs/assets/reloops-smart-metadata.png) | ![Share link controls](docs/assets/reloops-share-link.png) |
-| **Smart metadata**<br />Generate descriptions and tags so creative assets become searchable, reusable, and easier for agents to understand. | **Share links**<br />Create controlled asset or collection links with download, comment, lock, and expiration settings. |
-| ![Guest review](docs/assets/reloops-guest-review.png) | ![Version comparison](docs/assets/reloops-compare-versions.png) |
-| **Guest review**<br />Let external reviewers identify themselves, view shared assets, comment, and participate without joining the workspace. | **Version comparison**<br />Compare revisions and keep approval history attached to the asset. |
-| ![Notifications](docs/assets/reloops-notifications.png) | ![Agent and developer keys](docs/assets/reloops-agent-keys.png) |
-| **Notifications**<br />Track review activity, mentions, file updates, and smart metadata completion from one notification center. | **Agent setup**<br />Create developer keys for OpenClaw, OpenAI, Claude, Gemini, Zapier, n8n, Replicate, Runway, and custom agents. |
-| ![Agent key registry](docs/assets/reloops-agent-key-registry.png) | **Built for creative operations**<br /><br />Reloops keeps assets, people, comments, metadata, approvals, and agents in the same operating system. |
-| **Agent registry**<br />Reveal, copy, revoke, and audit controlled API actors that operate inside the DAM. | **From upload to reuse**<br />Everything is designed around making creative assets findable, reviewable, shareable, and reusable. |
-
-# Intro
-
-- Organize every campaign asset in a self-hosted creative DAM.
-- Move assets through project workflows from needs review to approved.
-- Search by name, type, folder path, status, tags, people, dates, usage fields, and AI-generated metadata.
-- Manage versions, approvals, share links, and guest review feedback without losing asset history.
-- Build dynamic collections for campaigns, clients, teams, launches, and reusable asset groups.
-- Track review activity, file updates, mentions, and smart metadata jobs from a notification center.
-- Invite humans and agents into the same creative workspace.
-- Perfect for automation with platforms like n8n, Make, Zapier, OpenClaw, custom agents, and internal workflows.
-
-## Alternative To
+## A modern alternative to closed DAM and creative review tools
 
 Reloops is a DAM-first product. Review and approval are built in because assets do not stop at storage.
 
@@ -112,6 +79,73 @@ Reloops is a DAM-first product. Review and approval are built in because assets 
 | Ziflow, Filestage, ReviewStudio | Structured creative feedback without a heavyweight enterprise approval suite |
 | Zapier, n8n, Make, custom agents | Controlled API actors that can create projects, fetch assets, comment, enrich metadata, and manage shares |
 | A custom internal DAM | Auth, storage, asset views, review UI, share links, API keys, and local workers already wired together |
+
+## 🔌 See the leading Reloops features
+
+<p align="center">
+  <img alt="Reloops creative asset workspace" src="docs/assets/reloops-workspace.png" />
+</p>
+
+## ✨ Features
+
+### Find any asset instantly
+
+Search across folders, tags, metadata, status, people, smart descriptions, dates, formats, and version stacks from one focused DAM surface.
+
+<p align="center">
+  <img alt="Reloops digital asset search" src="docs/assets/reloops-dam-search.png" />
+</p>
+
+### Keep every campaign moving
+
+Move assets from needs review to approved with project-level workflow boards, progress indicators, filters, bulk selection, upload, share, and download actions.
+
+<p align="center">
+  <img alt="Reloops project workflow" src="docs/assets/reloops-kanban-workflow.png" />
+</p>
+
+### Turn media into searchable knowledge
+
+Generate descriptions and tags so creative assets become searchable, reusable, and easier for agents to understand.
+
+<p align="center">
+  <img alt="Reloops smart metadata" src="docs/assets/reloops-smart-metadata.png" />
+</p>
+
+### Publish collections clients can actually use
+
+Package campaign assets into branded collections that can be browsed, searched, downloaded, and shared without exposing the whole workspace.
+
+<p align="center">
+  <img alt="Reloops published collection" src="docs/assets/reloops-published-collection.png" />
+</p>
+
+### Share review links without losing control
+
+Create controlled asset or collection links with download permissions, comments, locked item sets, and expiration settings.
+
+<p align="center">
+  <img alt="Reloops share link controls" src="docs/assets/reloops-share-link.png" />
+</p>
+
+### Invite agents into the DAM
+
+Create developer keys for OpenClaw, OpenAI, Claude, Gemini, Zapier, n8n, Replicate, Runway, and custom agents so automation can operate inside your creative asset system.
+
+<p align="center">
+  <img alt="Reloops agent and developer keys" src="docs/assets/reloops-agent-keys.png" />
+</p>
+
+# Intro
+
+- Organize every campaign asset in a self-hosted creative DAM.
+- Move assets through project workflows from needs review to approved.
+- Search by name, type, folder path, status, tags, people, dates, usage fields, and AI-generated metadata.
+- Manage versions, approvals, share links, and guest review feedback without losing asset history.
+- Build dynamic collections for campaigns, clients, teams, launches, and reusable asset groups.
+- Track review activity, file updates, mentions, and smart metadata jobs from a notification center.
+- Invite humans and agents into the same creative workspace.
+- Perfect for automation with platforms like n8n, Make, Zapier, OpenClaw, custom agents, and internal workflows.
 
 ## Agent-ready DAM
 
