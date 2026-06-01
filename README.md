@@ -80,6 +80,16 @@ Reloops is a DAM-first product. Review and approval are built in because assets 
 | Zapier, n8n, Make, custom agents | Controlled API actors that can create projects, fetch assets, comment, enrich metadata, and manage shares |
 | A custom internal DAM | Auth, storage, asset views, review UI, share links, API keys, and local workers already wired together |
 
+## Built for real collaboration
+
+| Collaboration need | What Reloops gives you |
+|--------------------|------------------------|
+| Team access | Organization members, workspace roles, project reviewers, and invite flows |
+| Clear ownership | Asset assignees for humans and API-key agents |
+| Review routing | Review requested, approved, changes requested, overdue, mention, reply, and guest feedback events |
+| Notification control | In-app notifications plus email-ready notification preferences by event type |
+| Guest participation | External reviewers can identify themselves, comment, and leave feedback from share links |
+
 ## 🔌 See the leading Reloops features
 
 <p align="center">
@@ -136,6 +146,14 @@ Create developer keys for OpenClaw, OpenAI, Claude, Gemini, Zapier, n8n, Replica
   <img alt="Reloops agent and developer keys" src="docs/assets/reloops-agent-keys.png" />
 </p>
 
+### Coordinate teams, reviewers, and assignments
+
+Manage organization members, project reviewers, asset assignees, guest feedback, mentions, and review activity from the same workspace. Reloops keeps human responsibility attached to the asset, not buried in chat.
+
+<p align="center">
+  <img alt="Reloops notifications" src="docs/assets/reloops-notifications.png" />
+</p>
+
 # Intro
 
 - Organize every campaign asset in a self-hosted creative DAM.
@@ -144,12 +162,15 @@ Create developer keys for OpenClaw, OpenAI, Claude, Gemini, Zapier, n8n, Replica
 - Manage versions, approvals, share links, and guest review feedback without losing asset history.
 - Build dynamic collections for campaigns, clients, teams, launches, and reusable asset groups.
 - Track review activity, file updates, mentions, and smart metadata jobs from a notification center.
+- Manage team members, reviewers, roles, asset assignees, and guest feedback in the same workspace.
+- Use in-app notifications and email-ready notification preferences for review requests, approvals, changes requested, mentions, replies, and guest feedback.
 - Invite humans and agents into the same creative workspace.
 - Perfect for automation with platforms like n8n, Make, Zapier, OpenClaw, custom agents, and internal workflows.
 
 ## Agent-ready DAM
 
 - API-key actors can operate inside organization workspaces.
+- Human teammates, reviewers, and API-key agents can all be assigned asset work.
 - Agents can list and create workspaces and projects.
 - Agents can fetch assets, patch asset status, create comments, and manage share links.
 - The local asset intelligence worker can generate smart descriptions and tags.
