@@ -35,6 +35,7 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
     const canceledRef = useRef<Set<string>>(new Set());
     const processingIdsRef = useRef<Set<string>>(new Set());
     const folderMapRef = useRef<Map<string, string>>(new Map());
+    const pendingFolderCreatesRef = useRef<Map<string, Promise<string>>>(new Map());
     const folderCacheLoadedRef = useRef(false);
 
     function overLimit(file: File) {
@@ -68,38 +69,49 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
         const cacheKey = folderKey(parentFolderId, name);
         const existingId = folderMapRef.current.get(cacheKey);
         if (existingId) return existingId;
+        const pending = pendingFolderCreatesRef.current.get(cacheKey);
+        if (pending) return pending;
 
-        const { data, error } = await invokeEdgeFunction<{ data?: { id: string; name: string; parent_folder_id?: string | null } }>("asset", {
-            body: {
-                action: "create_folder",
-                workspace_id: workspaceId,
-                ...(projectId ? { project_id: projectId } : {}),
-                parent_folder_id: parentFolderId,
-                name,
-            },
-        });
+        const createPromise = (async () => {
+            const { data, error } = await invokeEdgeFunction<{ data?: { id: string; name: string; parent_folder_id?: string | null } }>("asset", {
+                body: {
+                    action: "create_folder",
+                    workspace_id: workspaceId,
+                    ...(projectId ? { project_id: projectId } : {}),
+                    parent_folder_id: parentFolderId,
+                    name,
+                },
+            });
 
-        if (error) throw error;
-        if (!data?.data?.id) throw new Error("No folder returned");
+            if (error) throw error;
+            if (!data?.data?.id) throw new Error("No folder returned");
 
-        const createdFolderId = String(data.data.id);
-        folderMapRef.current.set(cacheKey, createdFolderId);
-        window.dispatchEvent(new CustomEvent("asset-folders:changed", {
-            detail: { workspaceId, projectId: projectId ?? null, folderId: createdFolderId },
-        }));
-        return createdFolderId;
+            const createdFolderId = String(data.data.id);
+            folderMapRef.current.set(cacheKey, createdFolderId);
+            window.dispatchEvent(new CustomEvent("asset-folders:changed", {
+                detail: { workspaceId, projectId: projectId ?? null, folderId: createdFolderId },
+            }));
+            return createdFolderId;
+        })();
+
+        pendingFolderCreatesRef.current.set(cacheKey, createPromise);
+        try {
+            return await createPromise;
+        } finally {
+            pendingFolderCreatesRef.current.delete(cacheKey);
+        }
     }
 
-    async function resolveFolderIdForFile(file: File) {
+    async function resolveFolderIdForFile(file: File, baseFolderId: string | null) {
         const relativePath = getRelativeFilePath(file);
-        if (!relativePath) return folderId ?? null;
+        if (!relativePath) return baseFolderId;
 
         const segments = relativePath.split("/").filter(Boolean);
-        if (segments.length <= 1) return folderId ?? null;
+        if (segments.length <= 1) return baseFolderId;
 
         await ensureFolderCacheLoaded();
 
-        let parentFolderId = folderId ?? null;
+        let parentFolderId = baseFolderId;
         for (const segment of segments.slice(0, -1)) {
             parentFolderId = folderMapRef.current.get(folderKey(parentFolderId, segment)) ?? await createFolderInScope(segment, parentFolderId);
         }
@@ -110,7 +122,7 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
         return new Set(list.map((u) => `${u.relativePath ?? u.name}|${u.size}`));
     }
 
-    function addFiles(files: FileList | File[]) {
+    function addFiles(files: FileList | File[], destinationFolderId: string | null = folderId ?? null) {
         const list = Array.from(files);
         const uploadBatchId = crypto.randomUUID();
         const uploadBatchTotal = list.filter((f) => f.size > 0 && !!f.name).length;
@@ -129,7 +141,7 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
                     type: contentType,
                     size: f.size,
                     relativePath: getRelativeFilePath(f),
-                    folderId: getRelativeFilePath(f) ? undefined : (folderId ?? null),
+                    folderId: destinationFolderId,
                     progress: 0,
                     status: (overLimit(f) || check.suspicious) ? "error" : "queued",
                     errorMessage: overLimit(f)
@@ -160,7 +172,7 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
         setUploads((prev) => prev.map((u) => u.id === item.id ? ({ ...u, status: "uploading", phase: "prepare", progress: 0 }) : u));
 
         try {
-            const resolvedFolderId = await resolveFolderIdForFile(item.file);
+            const resolvedFolderId = await resolveFolderIdForFile(item.file, item.folderId ?? folderId ?? null);
             if (canceledRef.current.has(item.id)) return;
 
             const assetId = crypto.randomUUID();
@@ -249,6 +261,7 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
 
     useEffect(() => {
         folderMapRef.current = new Map();
+        pendingFolderCreatesRef.current = new Map();
         folderCacheLoadedRef.current = false;
     }, [workspaceId, projectId, folderId]);
 

@@ -1178,12 +1178,27 @@ export default function CampaignDetails({
 
   const handleFolderDrop = React.useCallback((targetParentFolderId: string | null) =>
     async (event: React.DragEvent<HTMLElement>) => {
+      if (event.dataTransfer.types.includes("Files")) {
+        event.preventDefault();
+        event.stopPropagation();
+        setFolderDropTargetId(null);
+        setDraggingFolderId(null);
+        if (!requestUploadAccess()) return;
+
+        const files = await getFilesFromEvent(event);
+        if (files.length) {
+          addFiles(files, targetParentFolderId);
+          setActiveTab("assets");
+        }
+        return;
+      }
+
       const draggedFolderId = draggingFolderId || event.dataTransfer.getData("text/plain");
       if (!draggedFolderId || !canMoveFolderToParent(draggedFolderId, targetParentFolderId)) return;
       event.preventDefault();
       event.stopPropagation();
       await moveFolder(draggedFolderId, targetParentFolderId);
-    }, [canMoveFolderToParent, draggingFolderId, moveFolder]);
+    }, [addFiles, canMoveFolderToParent, draggingFolderId, moveFolder]);
 
   const projectVisibleFolderIds = useMemo(() => {
     const visible = new Set<string>();

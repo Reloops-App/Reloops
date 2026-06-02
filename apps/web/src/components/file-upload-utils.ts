@@ -361,11 +361,20 @@ export async function makeVideoThumbnail(file: File): Promise<Blob | null> {
     }
 }
 
+function canBrowserDecodeVideoType(contentType: string): boolean {
+    if (typeof document === "undefined") return true;
+    const video = document.createElement("video");
+    return video.canPlayType(contentType) !== "";
+}
+
 export async function generateThumbnailBlob(file: File): Promise<Blob | null> {
     try {
         const contentType = inferFileContentType(file);
         if (isImage(contentType)) return await makeImageThumbnail(file);
-        if (isVideo(contentType)) return await makeVideoThumbnail(file);
+        if (isVideo(contentType)) {
+            if (!canBrowserDecodeVideoType(contentType)) return null;
+            return await makeVideoThumbnail(file);
+        }
         return null;
     } catch (e) {
         console.error("Thumbnail generation failed", e, "for file", file.name);

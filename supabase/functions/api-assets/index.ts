@@ -4,6 +4,33 @@ import { admin } from "../../shared/supabaseAdmin.ts";
 import { verifyApiKey, corsHeaders, json, bad, unauth, notfound } from "../../shared/apiAuth.ts";
 import { listProjectAssetRows } from "../../shared/dam.ts";
 
+function extensionFor(fileName: string, contentType: string) {
+    const ext = fileName.split(".").pop()?.trim();
+    if (ext && ext !== fileName && /^[a-z0-9]{1,12}$/i.test(ext)) return ext;
+    if (contentType === "image/jpeg") return "jpg";
+    if (contentType === "image/png") return "png";
+    if (contentType === "video/mp4") return "mp4";
+    if (contentType === "video/quicktime") return "mov";
+    if (contentType === "application/pdf") return "pdf";
+    if (contentType.startsWith("text/")) return "txt";
+    return "bin";
+}
+
+function formString(form: FormData, key: string) {
+    const value = form.get(key);
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function parseTags(value: string | null) {
+    if (!value) return [];
+    try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+        return value.split(",").map((item) => item.trim()).filter(Boolean);
+    }
+}
+
 serve(async (req) => {
     if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -16,6 +43,120 @@ serve(async (req) => {
         const pathSegments = url.pathname.split('/').filter(Boolean);
         const funcIdx = pathSegments.indexOf("api-assets");
         const routeParts = funcIdx !== -1 ? pathSegments.slice(funcIdx + 1) : pathSegments;
+
+        if (routeParts.length === 1 && routeParts[0] === "upload" && req.method === "POST") {
+            const form = await req.formData().catch(() => null);
+            if (!form) return bad("Expected multipart/form-data");
+
+            const file = form.get("file");
+            if (!(file instanceof File)) return bad("Missing file");
+
+            const workspace_id = formString(form, "workspace_id");
+            if (!workspace_id) return bad("Missing 'workspace_id'");
+            if (!apiKey.workspace_ids.includes(workspace_id)) return notfound();
+
+            const parentAssetId = formString(form, "parent_asset_id") ?? formString(form, "parentAssetId");
+            let project_id = formString(form, "project_id");
+            let folder_id = formString(form, "folder_id");
+            let parent_asset_id: string | null = null;
+            let version_no = 1;
+
+            if (parentAssetId) {
+                const { data: parentAsset, error: parentError } = await admin
+                    .from("assets")
+                    .select("id, workspace_id, parent_asset_id, version_no, project_id, folder_id")
+                    .eq("id", parentAssetId)
+                    .maybeSingle();
+                if (parentError) return bad("Failed to load parent asset", 500);
+                if (!parentAsset || parentAsset.workspace_id !== workspace_id) return bad("Parent asset not found or inaccessible");
+
+                const rootId = parentAsset.parent_asset_id ?? parentAsset.id;
+                const { data: versions, error: versionError } = await admin
+                    .from("assets")
+                    .select("version_no")
+                    .or(`id.eq.${rootId},parent_asset_id.eq.${rootId}`);
+                if (versionError) return bad("Failed to load versions", 500);
+
+                parent_asset_id = rootId;
+                version_no = Math.max(1, ...(versions ?? []).map((row: any) => Number(row.version_no) || 1)) + 1;
+                project_id = project_id ?? parentAsset.project_id ?? null;
+                folder_id = folder_id ?? parentAsset.folder_id ?? null;
+            }
+
+            if (project_id) {
+                const { data: project } = await admin
+                    .from("projects")
+                    .select("id")
+                    .eq("id", project_id)
+                    .eq("workspace_id", workspace_id)
+                    .neq("status", "deleted")
+                    .maybeSingle();
+                if (!project) return bad("Project not found or inaccessible");
+            }
+
+            if (folder_id) {
+                const { data: folder } = await admin
+                    .from("folders")
+                    .select("id, project_id")
+                    .eq("id", folder_id)
+                    .eq("workspace_id", workspace_id)
+                    .is("deleted_at", null)
+                    .maybeSingle();
+                const folderProjectId = folder?.project_id ? String(folder.project_id) : null;
+                if (!folder || folderProjectId !== (project_id ? String(project_id) : null)) {
+                    return bad("Folder not found or inaccessible");
+                }
+            }
+
+            const assetId = crypto.randomUUID();
+            const contentType = (formString(form, "mime_type") ?? file.type) || "application/octet-stream";
+            const title = formString(form, "title") ?? file.name;
+            const objectKey = `${workspace_id}/${project_id ?? "library"}/${assetId}.${extensionFor(file.name, contentType)}`;
+
+            const { error: uploadError } = await admin.storage
+                .from("assets")
+                .upload(objectKey, file, {
+                    contentType,
+                    upsert: false,
+                });
+            if (uploadError) {
+                console.error("api-assets upload storage error:", uploadError);
+                return bad("Failed to upload file", 500);
+            }
+
+            const { data: created, error: createErr } = await admin
+                .from("assets")
+                .insert({
+                    id: assetId,
+                    workspace_id,
+                    project_id: project_id ?? null,
+                    folder_id: folder_id ?? null,
+                    parent_asset_id,
+                    version_no,
+                    title,
+                    description: formString(form, "description"),
+                    tags: parseTags(formString(form, "tags")),
+                    storage_path: objectKey,
+                    cover_image_url: formString(form, "cover_image_url"),
+                    thumbnail_path: formString(form, "thumbnail_path"),
+                    mime_type: contentType,
+                    size_bytes: file.size,
+                    uploaded_by: apiKey.created_by,
+                    created_by_api_key_id: apiKey.id,
+                    uploaded_by_api_key_id: apiKey.id,
+                })
+                .select("*")
+                .single();
+
+            if (createErr) {
+                await admin.storage.from("assets").remove([objectKey]).catch(() => undefined);
+                console.error("api-assets upload asset create error:", createErr);
+                return bad("Failed to create uploaded asset", 500);
+            }
+
+            const { data: pubData } = admin.storage.from("assets").getPublicUrl(objectKey);
+            return json({ data: { ...created, download_url: pubData?.publicUrl ?? null } }, 201);
+        }
 
         if (routeParts.length === 0 && req.method === "POST") {
             let body: any = {};

@@ -16,6 +16,19 @@ import { Separator } from "@radix-ui/react-separator"
 type SortKey = "createdAt" | "name" | "sizeBytes" | "status"
 type SortDir = "asc" | "desc"
 
+function extractAssetRows(payload: unknown): any[] {
+    const value = payload as any
+    const body = value?.data ?? value ?? {}
+    if (Array.isArray(body?.assets)) return body.assets
+    if (Array.isArray(body)) return body
+    if (Array.isArray(value?.assets)) return value.assets
+    return []
+}
+
+function isDeletedAsset(asset: any) {
+    return String(asset?.status ?? "").toLowerCase() === "deleted"
+}
+
 export default function CollectionsPage() {
     const { workspaceId, collectionName } = useParams<{ workspaceId: string; collectionName: string }>()
     const navigate = useNavigate()
@@ -100,8 +113,7 @@ export default function CollectionsPage() {
 
                 if (error) throw error
                 if (!isMounted) return
-                const rows = Array.isArray((data as any)?.data) ? (data as any).data : (Array.isArray(data) ? (data as any) : [])
-                setAssets(normalizeAssets(rows))
+                setAssets(normalizeAssets(extractAssetRows(data).filter((row) => !isDeletedAsset(row))))
             } catch (err: any) {
                 console.error("CollectionsPage: failed to load assets", err)
                 if (!isMounted) return
@@ -115,8 +127,7 @@ export default function CollectionsPage() {
                         await refreshSupabaseSessionViaHttp()
                         const retry = await loadWithTimeout(15_000)
                         if (retry.error) throw retry.error
-                        const rows = Array.isArray((retry.data as any)?.data) ? (retry.data as any).data : []
-                        setAssets(normalizeAssets(rows))
+                        setAssets(normalizeAssets(extractAssetRows(retry.data).filter((row) => !isDeletedAsset(row))))
                         return
                     } catch (e) {
                         console.error("CollectionsPage: retry after refresh failed", e)

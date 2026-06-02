@@ -51,6 +51,8 @@
 <p align="center">
   <a href="docs/SETUP.md">Quick Start</a>
   ·
+  <a href="docs/openclaw-reloops-api.md">OpenClaw API Skill</a>
+  ·
   <a href="#features">Features</a>
   ·
   <a href="#alternative-to">Alternative To</a>
@@ -196,6 +198,7 @@ Reloops is a DAM-first product. Review and approval are built in because creativ
 - 💬 Agents can receive review assignments and reply in the same comment thread as the team.
 - 🗂️ Agents can list and create workspaces and projects.
 - 🔌 Agents can fetch assets, patch asset status, create comments, and manage share links.
+- 🧩 OpenClaw can use the included [`openclaw-reloops-api`](skills/openclaw-reloops-api/SKILL.md) skill; see the [OpenClaw API Skill guide](docs/openclaw-reloops-api.md).
 - 🤖 The local asset intelligence worker uses AI to generate smart descriptions and tags for assets.
 - 🔁 Generated media can flow back into the same library, collection, review, and approval loop.
 
@@ -210,7 +213,14 @@ Reloops is a DAM-first product. Review and approval are built in because creativ
 
 ## 🚀 Quick Start
 
-To have the project up and running, please follow the [Local Setup Guide](docs/SETUP.md).
+Start the full local OSS stack with Docker:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Then open `http://127.0.0.1:6173`. For manual pnpm setup and environment details, see the [Local Setup Guide](docs/SETUP.md).
 
 ## 🏠 Self-hosted OSS
 

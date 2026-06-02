@@ -27,14 +27,40 @@ Deno.serve(async (req) => {
     }
 
     if (action === "create_folder") {
+      const projectId = body.project_id ?? null;
+      const parentFolderId = body.parent_folder_id ?? null;
+      const name = String(body.name ?? "Untitled Folder").trim() || "Untitled Folder";
+
+      const existingFolderQuery = () => {
+        let q = admin
+          .from("folders")
+          .select("*")
+          .eq("workspace_id", workspaceId)
+          .eq("name", name)
+          .order("created_at", { ascending: true })
+          .limit(1);
+        q = projectId ? q.eq("project_id", projectId) : q.is("project_id", null);
+        q = parentFolderId ? q.eq("parent_folder_id", parentFolderId) : q.is("parent_folder_id", null);
+        return q;
+      };
+
+      const { data: existing, error: existingError } = await existingFolderQuery().maybeSingle();
+      if (existingError) throw existingError;
+      if (existing) return json({ data: existing });
+
       const { data, error } = await admin.from("folders").insert({
         workspace_id: workspaceId,
-        project_id: body.project_id ?? null,
-        parent_folder_id: body.parent_folder_id ?? null,
-        name: String(body.name ?? "Untitled Folder"),
+        project_id: projectId,
+        parent_folder_id: parentFolderId,
+        name,
         created_by: user.id,
       }).select("*").single();
-      if (error) throw error;
+      if (error) {
+        const { data: existingAfterRace, error: raceLookupError } = await existingFolderQuery().maybeSingle();
+        if (raceLookupError) throw raceLookupError;
+        if (existingAfterRace) return json({ data: existingAfterRace });
+        throw error;
+      }
       return json({ data });
     }
 
@@ -54,6 +80,7 @@ Deno.serve(async (req) => {
       let q = admin.from("assets").select("*").order("created_at", { ascending: false });
       if (workspaceId) q = q.eq("workspace_id", workspaceId);
       if (body.project_id) q = q.eq("project_id", body.project_id);
+      if (!body.include_deleted) q = q.or("status.neq.deleted,status.is.null");
       const { data, error } = await q;
       if (error) throw error;
       if (action === "list_project") {
@@ -122,6 +149,73 @@ Deno.serve(async (req) => {
       if (error) throw error;
       await admin.from("asset_history").insert({ asset_id: data.id, event_type: "revision_requested", actor_user_id: user.id });
       return json({ data });
+    }
+
+    if (action === "detach_project") {
+      const projectId = String(body.project_id ?? body.projectId ?? "");
+      const assetId = String(body.asset_id ?? body.assetId ?? body.id ?? "");
+      if (!projectId || !assetId) return json({ error: "project_id and asset_id required" }, { status: 400 });
+
+      const { data: project, error: projectError } = await admin
+        .from("projects")
+        .select("id, workspace_id")
+        .eq("id", projectId)
+        .maybeSingle();
+      if (projectError) throw projectError;
+      if (!project) return json({ error: "Project not found" }, { status: 404 });
+      if (!await isWorkspaceMember(project.workspace_id, user.id)) return json({ error: "Forbidden" }, { status: 403 });
+
+      const { data: target, error: targetError } = await admin
+        .from("assets")
+        .select("id, workspace_id, parent_asset_id")
+        .eq("id", assetId)
+        .maybeSingle();
+      if (targetError) throw targetError;
+      if (!target) return json({ error: "Asset not found" }, { status: 404 });
+      if (target.workspace_id !== project.workspace_id) return json({ error: "Asset not found in project workspace" }, { status: 404 });
+
+      const rootId = target.parent_asset_id ?? target.id;
+      const { data: stack, error: stackError } = await admin
+        .from("assets")
+        .select("id")
+        .eq("workspace_id", project.workspace_id)
+        .or(`id.eq.${rootId},parent_asset_id.eq.${rootId}`);
+      if (stackError) throw stackError;
+
+      const stackIds = (stack ?? []).map((row) => row.id);
+      if (stackIds.length === 0) return json({ data: { removed_asset_ids: [] } });
+
+      const { data: removed, error: updateError } = await admin
+        .from("assets")
+        .update({ project_id: null, folder_id: null, updated_by: user.id })
+        .in("id", stackIds)
+        .eq("project_id", projectId)
+        .select("id");
+      if (updateError) throw updateError;
+
+      const removedIds = (removed ?? []).map((row) => row.id);
+
+      const { error: linkError } = await admin
+        .from("project_asset_links")
+        .delete()
+        .eq("project_id", projectId)
+        .eq("asset_root_id", rootId);
+      if (linkError) throw linkError;
+
+      if (removedIds.length > 0) {
+        await admin.from("asset_history").insert(
+          removedIds.map((id) => ({
+            asset_id: id,
+            event_type: "asset_detached_from_project",
+            workspace_id: project.workspace_id,
+            project_id: projectId,
+            actor_user_id: user.id,
+            metadata: { project_id: projectId, root_asset_id: rootId },
+          })),
+        );
+      }
+
+      return json({ data: { removed_asset_ids: removedIds, root_asset_id: rootId } });
     }
 
     if (action === "delete") {

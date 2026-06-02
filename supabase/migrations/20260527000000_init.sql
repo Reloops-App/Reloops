@@ -176,6 +176,78 @@ create table public.asset_history (
   created_at timestamptz not null default now()
 );
 
+create table public.notifications (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  project_id uuid references public.projects(id) on delete cascade,
+  asset_id uuid references public.assets(id) on delete cascade,
+  collection_id uuid references public.collections(id) on delete cascade,
+  recipient_user_id uuid not null references auth.users(id) on delete cascade,
+  actor_user_id uuid references auth.users(id) on delete set null,
+  actor_guest_name text,
+  actor_guest_email citext,
+  notification_type text not null check (notification_type in (
+    'workspace.added',
+    'project.added',
+    'file.uploaded',
+    'file.version_uploaded',
+    'review.requested',
+    'review.approved',
+    'review.changes_requested',
+    'review.overdue',
+    'comment.mention',
+    'comment.reply',
+    'guest.feedback',
+    'asset.intelligence_ready',
+    'asset.intelligence_completed',
+    'asset.intelligence_failed',
+    'search.index_failed'
+  )),
+  title text not null,
+  message text,
+  target_url text,
+  metadata jsonb not null default '{}'::jsonb,
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table public.notification_preferences (
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  notification_type text not null check (notification_type in (
+    'workspace.added',
+    'project.added',
+    'file.uploaded',
+    'file.version_uploaded',
+    'review.requested',
+    'review.approved',
+    'review.changes_requested',
+    'review.overdue',
+    'comment.mention',
+    'comment.reply',
+    'guest.feedback',
+    'asset.intelligence_ready',
+    'asset.intelligence_completed',
+    'asset.intelligence_failed',
+    'search.index_failed'
+  )),
+  email_enabled boolean not null default false,
+  in_app_enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (workspace_id, user_id, notification_type)
+);
+
+create table public.notification_digest_preferences (
+  workspace_id uuid not null references public.workspaces(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  digest_enabled boolean not null default true,
+  digest_frequency text not null default 'daily' check (digest_frequency in ('hourly', 'daily', 'weekly')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (workspace_id, user_id)
+);
+
 create table public.invitations (
   id uuid primary key default gen_random_uuid(),
   organization_id uuid references public.organizations(id) on delete cascade,
@@ -253,6 +325,9 @@ create index workspaces_organization_idx on public.workspaces (organization_id);
 create index organization_members_user_idx on public.organization_members (user_id);
 create index asset_history_asset_idx on public.asset_history (asset_id, created_at desc);
 create index asset_history_workspace_created_idx on public.asset_history (workspace_id, created_at desc);
+create index notifications_recipient_workspace_idx on public.notifications (recipient_user_id, workspace_id, read_at, created_at desc);
+create index notifications_workspace_created_idx on public.notifications (workspace_id, created_at desc);
+create index notifications_asset_idx on public.notifications (asset_id, created_at desc) where asset_id is not null;
 create index api_keys_organization_idx on public.api_keys (organization_id);
 create unique index api_keys_key_hash_unique_idx on public.api_keys (key_hash) where key_hash is not null;
 create index project_asset_links_asset_root_project_idx on public.project_asset_links (asset_root_id, project_id);
@@ -282,6 +357,8 @@ create trigger assets_touch_updated_at before update on public.assets for each r
 create trigger comments_touch_updated_at before update on public.asset_comments for each row execute function public.touch_updated_at();
 create trigger collections_touch_updated_at before update on public.collections for each row execute function public.touch_updated_at();
 create trigger asset_intelligence_jobs_touch_updated_at before update on public.asset_intelligence_jobs for each row execute function public.touch_updated_at();
+create trigger notification_preferences_touch_updated_at before update on public.notification_preferences for each row execute function public.touch_updated_at();
+create trigger notification_digest_preferences_touch_updated_at before update on public.notification_digest_preferences for each row execute function public.touch_updated_at();
 
 create or replace function public.enqueue_asset_intelligence_job_for_asset()
 returns trigger
@@ -465,6 +542,9 @@ alter table public.project_asset_links enable row level security;
 alter table public.share_links enable row level security;
 alter table public.api_keys enable row level security;
 alter table public.asset_history enable row level security;
+alter table public.notifications enable row level security;
+alter table public.notification_preferences enable row level security;
+alter table public.notification_digest_preferences enable row level security;
 alter table public.asset_intelligence_jobs enable row level security;
 alter table public.invitations enable row level security;
 
@@ -572,6 +652,31 @@ create policy asset_history_select_member on public.asset_history for select usi
 );
 create policy asset_history_insert_member on public.asset_history for insert with check (
   exists (select 1 from public.assets a where a.id = asset_history.asset_id and public.is_workspace_member(a.workspace_id))
+);
+create policy notifications_select_recipient on public.notifications for select using (
+  recipient_user_id = auth.uid()
+  and public.is_workspace_member(workspace_id)
+);
+create policy notifications_update_recipient on public.notifications for update using (
+  recipient_user_id = auth.uid()
+  and public.is_workspace_member(workspace_id)
+) with check (
+  recipient_user_id = auth.uid()
+  and public.is_workspace_member(workspace_id)
+);
+create policy notification_preferences_all_self on public.notification_preferences for all using (
+  user_id = auth.uid()
+  and public.is_workspace_member(workspace_id)
+) with check (
+  user_id = auth.uid()
+  and public.is_workspace_member(workspace_id)
+);
+create policy notification_digest_preferences_all_self on public.notification_digest_preferences for all using (
+  user_id = auth.uid()
+  and public.is_workspace_member(workspace_id)
+) with check (
+  user_id = auth.uid()
+  and public.is_workspace_member(workspace_id)
 );
 create policy asset_intelligence_jobs_select_member on public.asset_intelligence_jobs for select using (
   public.is_workspace_member(workspace_id)

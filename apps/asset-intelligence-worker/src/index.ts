@@ -197,6 +197,94 @@ async function writeAssetHistory(asset: NormalizedAsset, result: AnalysisResult)
   });
 }
 
+async function activeWorkspaceUserIds(workspaceId: string): Promise<string[]> {
+  const workspaceUrl = new URL(`${supabaseBaseUrl()}/rest/v1/workspaces`);
+  workspaceUrl.searchParams.set("select", "organization_id");
+  workspaceUrl.searchParams.set("id", `eq.${workspaceId}`);
+  workspaceUrl.searchParams.set("limit", "1");
+
+  const workspaces = await supabaseJson<Array<{ organization_id: string }>>(`${workspaceUrl.pathname}${workspaceUrl.search}`);
+  const organizationId = workspaces?.[0]?.organization_id;
+  if (!organizationId) return [];
+
+  const membersUrl = new URL(`${supabaseBaseUrl()}/rest/v1/organization_members`);
+  membersUrl.searchParams.set("select", "user_id");
+  membersUrl.searchParams.set("organization_id", `eq.${organizationId}`);
+  membersUrl.searchParams.set("role", "in.(owner,admin,member,billing)");
+
+  const members = await supabaseJson<Array<{ user_id: string | null }>>(`${membersUrl.pathname}${membersUrl.search}`);
+  return Array.from(new Set((members ?? []).map((member) => member.user_id).filter((userId): userId is string => Boolean(userId))));
+}
+
+function assetTargetUrl(asset: NormalizedAsset) {
+  if (asset.projectId) return `/workspace/${asset.workspaceId}/projects/${asset.projectId}/assets/${asset.id}`;
+  return `/workspace/${asset.workspaceId}/assets/${asset.id}`;
+}
+
+async function writeNotifications(
+  recipients: string[],
+  payload: {
+    workspace_id: string;
+    project_id: string | null;
+    asset_id: string;
+    notification_type: "asset.intelligence_completed" | "asset.intelligence_failed";
+    title: string;
+    message: string;
+    target_url: string;
+    metadata: Record<string, unknown>;
+  },
+) {
+  if (!recipients.length) return;
+  await supabaseJson<void>("/rest/v1/notifications", {
+    method: "POST",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify(recipients.map((recipient_user_id) => ({
+      ...payload,
+      recipient_user_id,
+    }))),
+  });
+}
+
+async function notifyIntelligenceCompleted(asset: NormalizedAsset, result: AnalysisResult) {
+  const recipients = await activeWorkspaceUserIds(asset.workspaceId);
+  await writeNotifications(recipients, {
+    workspace_id: asset.workspaceId,
+    project_id: asset.projectId,
+    asset_id: asset.id,
+    notification_type: "asset.intelligence_completed",
+    title: "Asset intelligence completed",
+    message: `${asset.title} has new smart metadata.`,
+    target_url: assetTargetUrl(asset),
+    metadata: {
+      asset_title: asset.title,
+      project_id: asset.projectId,
+      smart_tags: result.tags,
+      provider: result.ai_metadata.provider,
+      model: result.ai_metadata.model,
+    },
+  });
+}
+
+async function notifyIntelligenceFailed(job: DbJob, message: string) {
+  const recipients = await activeWorkspaceUserIds(job.workspace_id);
+  const asset = await fetchAsset(job.asset_id).then(normalizeAsset).catch(() => null);
+  const assetTitle = asset?.title ?? "Asset";
+  await writeNotifications(recipients, {
+    workspace_id: job.workspace_id,
+    project_id: job.project_id,
+    asset_id: job.asset_id,
+    notification_type: "asset.intelligence_failed",
+    title: "Asset intelligence failed",
+    message: `${assetTitle} could not be analyzed.`,
+    target_url: asset ? assetTargetUrl(asset) : `/workspace/${job.workspace_id}`,
+    metadata: {
+      asset_title: assetTitle,
+      project_id: job.project_id,
+      error: message,
+    },
+  });
+}
+
 function mimeFromPath(path: string | null | undefined): string | null {
   if (!path) return null;
   switch (extname(path).toLowerCase()) {
@@ -528,6 +616,9 @@ async function processJob(job: DbJob) {
     const result = await analyze(asset);
     await writeAssetMetadata(asset.id, result);
     await writeAssetHistory(asset, result);
+    await notifyIntelligenceCompleted(asset, result).catch((notifyError) => {
+      console.warn("[asset-intelligence-worker] completion notification failed", notifyError);
+    });
     await patchJob(job.id, {
       status: "completed",
       result,
@@ -539,6 +630,11 @@ async function processJob(job: DbJob) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     const terminal = job.attempts >= job.max_attempts;
+    if (terminal) {
+      await notifyIntelligenceFailed(job, message).catch((notifyError) => {
+        console.warn("[asset-intelligence-worker] failure notification failed", notifyError);
+      });
+    }
     await patchJob(job.id, {
       status: terminal ? "failed" : "queued",
       error: message,

@@ -10,6 +10,7 @@ if ! sh scripts/supabase-cli.sh db push --local --yes; then
 fi
 sleep 3
 node scripts/sync-env.mjs
+node scripts/ensure-storage-buckets.mjs
 
 sh scripts/supabase-cli.sh functions serve share --env-file .env &
 FUNCTIONS_PID=$!

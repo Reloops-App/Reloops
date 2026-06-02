@@ -5,6 +5,7 @@
   "packageManager": "pnpm@10.13.1",
   "scripts": {
     "setup": "node scripts/setup.mjs",
+    "storage:ensure": "node scripts/ensure-storage-buckets.mjs",
     "sync-env": "node scripts/sync-env.mjs",
     "start": "sh scripts/dev-all.sh",
     "dev": "pnpm --filter @reloops/web dev --host 127.0.0.1 --port 6173",
@@ -14,6 +15,8 @@
     "supabase:share": "sh scripts/supabase-cli.sh functions serve share --env-file .env",
     "supabase:functions": "sh scripts/supabase-cli.sh functions serve --env-file .env",
     "worker:asset-intelligence": "pnpm --filter @reloops/asset-intelligence-worker dev",
+    "docker:start": "docker compose up --build",
+    "docker:stop": "sh scripts/docker-stop.sh",
     "docker:asset-intelligence": "sh scripts/docker-asset-intelligence-worker.sh",
     "ai:requeue": "node scripts/requeue-asset-intelligence.mjs",
     "build": "pnpm --filter @reloops/web build",

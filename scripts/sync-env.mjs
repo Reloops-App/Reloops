@@ -87,6 +87,9 @@ if (!values.API_URL || !values.ANON_KEY || !values.SERVICE_ROLE_KEY) {
   throw new Error("Could not read Supabase local keys. Is Supabase running?");
 }
 
+const publicApiUrl = setting(process.env, "SUPABASE_PUBLIC_URL", values.API_URL);
+const serverApiUrl = setting(process.env, "SUPABASE_INTERNAL_URL", values.API_URL);
+
 const assetAiProvider = setting(existing, "ASSET_AI_PROVIDER", "mock");
 const assetAiModel = setting(existing, "ASSET_AI_MODEL", "gpt-4.1-mini");
 const openAiApiKey = setting(existing, "OPENAI_API_KEY", "");
@@ -101,7 +104,7 @@ const assetAiMaxVideoFrames = setting(existing, "ASSET_AI_MAX_VIDEO_FRAMES", "3"
 const assetAiVideoFrameWidth = setting(existing, "ASSET_AI_VIDEO_FRAME_WIDTH", "720");
 
 const workerSettings = [
-  `ASSET_SOURCE_BASE_URL=${values.API_URL}/storage/v1/object/public/assets`,
+  `ASSET_SOURCE_BASE_URL=${serverApiUrl}/storage/v1/object/public/assets`,
   `ASSET_AI_PROVIDER=${assetAiProvider}`,
   `ASSET_AI_MODEL=${assetAiModel}`,
   `OPENAI_API_KEY=${openAiApiKey}`,
@@ -119,17 +122,17 @@ const workerSettings = [
 const rootChanged = upsertEnvFile(
   ".env",
   {
-    VITE_SUPABASE_URL: values.API_URL,
+    VITE_SUPABASE_URL: publicApiUrl,
     VITE_SUPABASE_ANON_KEY: values.ANON_KEY,
-    VITE_ASSET_PUBLIC_BASE_URL: `${values.API_URL}/storage/v1/object/public/assets/`,
-    SUPABASE_URL: values.API_URL,
-    SUPABASE_PUBLIC_URL: values.API_URL,
+    VITE_ASSET_PUBLIC_BASE_URL: `${publicApiUrl}/storage/v1/object/public/assets/`,
+    SUPABASE_URL: serverApiUrl,
+    SUPABASE_PUBLIC_URL: publicApiUrl,
     SUPABASE_ANON_KEY: values.ANON_KEY,
     SUPABASE_SERVICE_ROLE_KEY: values.SERVICE_ROLE_KEY,
-    URL_SUPABASE: values.API_URL,
+    URL_SUPABASE: serverApiUrl,
     ANON_KEY: values.ANON_KEY,
     SERVICE_ROLE_KEY: values.SERVICE_ROLE_KEY,
-    ASSET_SOURCE_BASE_URL: `${values.API_URL}/storage/v1/object/public/assets`,
+    ASSET_SOURCE_BASE_URL: `${serverApiUrl}/storage/v1/object/public/assets`,
   },
   (_key, currentValue) => isPlaceholder(currentValue),
 );
@@ -155,10 +158,10 @@ const runtimeAssetAiVideoFrameWidth = setting(rootEnv, "ASSET_AI_VIDEO_FRAME_WID
 writeFileSync(
   "apps/web/.env.local",
   [
-    `VITE_SUPABASE_URL=${values.API_URL}`,
+    `VITE_SUPABASE_URL=${publicApiUrl}`,
     `VITE_SUPABASE_ANON_KEY=${values.ANON_KEY}`,
     `VITE_APP_URL=${setting(rootEnv, "VITE_APP_URL", setting(rootEnv, "FRONTEND_URL", "http://127.0.0.1:6173"))}`,
-    `VITE_ASSET_PUBLIC_BASE_URL=${values.API_URL}/storage/v1/object/public/assets/`,
+    `VITE_ASSET_PUBLIC_BASE_URL=${publicApiUrl}/storage/v1/object/public/assets/`,
     `VITE_RELOOPS_OSS=true`,
     "",
   ].join("\n"),
@@ -167,9 +170,9 @@ writeFileSync(
 writeFileSync(
   "apps/asset-intelligence-worker/.env.local",
   [
-    `SUPABASE_URL=${values.API_URL}`,
+    `SUPABASE_URL=${serverApiUrl}`,
     `SUPABASE_SERVICE_ROLE_KEY=${values.SERVICE_ROLE_KEY}`,
-    `ASSET_SOURCE_BASE_URL=${values.API_URL}/storage/v1/object/public/assets`,
+    `ASSET_SOURCE_BASE_URL=${serverApiUrl}/storage/v1/object/public/assets`,
     `ASSET_AI_PROVIDER=${runtimeAssetAiProvider}`,
     `ASSET_AI_MODEL=${runtimeAssetAiModel}`,
     `OPENAI_API_KEY=${runtimeOpenAiApiKey}`,

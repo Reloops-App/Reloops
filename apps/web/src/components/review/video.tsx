@@ -19,7 +19,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { cn, fmtHMSF, FPS, downloadFile } from "@/lib/utils";
-import { Play, Pause, Volume2, VolumeX, Maximize2, Captions, Download } from "lucide-react";
+import { Play, Pause, Volume2, VolumeX, Maximize2, Captions, Download, AlertTriangle } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { SeekBar } from "../video-player/seekbar";
 import CommentsPanel from "./CommentsPanel";
@@ -124,6 +124,7 @@ export default function VideoPlayerWithAnnotations({
     const containerRef = useRef<HTMLDivElement | null>(null);
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const [playing, setPlaying] = useState(false);
+    const [mediaError, setMediaError] = useState<string | null>(null);
     const [current, setCurrent] = useState(0);
     const [duration, setDuration] = useState(0);
     const [volume, setVolume] = useState(1);
@@ -156,6 +157,33 @@ export default function VideoPlayerWithAnnotations({
 
     // Prefer explicit src, fall back to videoUrl
     const videoSrc = _src ?? videoUrl;
+    const downloadName = asset?.title || "video";
+
+    const handleDownload = useCallback(() => {
+        const storagePath = (asset as any)?.storage_path;
+        if (storagePath) {
+            const proxy = import.meta.env.VITE_ASSET_PUBLIC_BASE_URL || "";
+            const base = proxy.endsWith("/") ? proxy.slice(0, -1) : proxy;
+            const path = storagePath.startsWith("/") ? storagePath : `/${storagePath}`;
+            void downloadFile(`${base}${path}`, downloadName);
+            return;
+        }
+        if (videoSrc) {
+            void downloadFile(videoSrc, downloadName);
+        }
+    }, [asset, downloadName, videoSrc]);
+
+    const handleMediaFailure = useCallback((error?: unknown) => {
+        const videoError = videoRef.current?.error;
+        const message = videoError?.message || (error instanceof Error ? error.message : "");
+        console.warn("Video playback failed", {
+            src: videoSrc,
+            mimeType: asset?.mime_type,
+            error: message || error,
+        });
+        setPlaying(false);
+        setMediaError("This video format is not supported by this browser.");
+    }, [asset?.mime_type, videoSrc]);
 
     const [annotations, setAnnotations] = useState<Annotation[]>([]);
 
@@ -165,6 +193,13 @@ export default function VideoPlayerWithAnnotations({
             setAnnotations(annotationsProp);
         }
     }, [annotationsProp]);
+
+    useEffect(() => {
+        setMediaError(null);
+        setPlaying(false);
+        setCurrent(0);
+        setDuration(0);
+    }, [videoSrc]);
 
     // allStrokes comes from useDrawing
 
@@ -223,10 +258,11 @@ export default function VideoPlayerWithAnnotations({
 
     const togglePlay = () => {
         const v = videoRef.current;
-        if (!v) return;
+        if (!v || mediaError) return;
         if (v.paused) {
-            void v.play();
-            setPlaying(true);
+            v.play()
+                .then(() => setPlaying(true))
+                .catch(handleMediaFailure);
         } else {
             v.pause();
             setPlaying(false);
@@ -329,34 +365,54 @@ export default function VideoPlayerWithAnnotations({
                             {/* Video container - Flex center to handle aspect ratio wrapper */}
                             <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black group">
 
-                                {/* Aspect Ratio Wrapper */}
-                                <div
-                                    ref={containerRef}
-                                    className={cn(
-                                        "relative max-h-full max-w-full shadow-2xl transition-opacity duration-300",
-                                        viewMode === "preview" && "opacity-0 pointer-events-none",
-                                        reviewMode === "comment" && "cursor-copy",
-                                        reviewMode === "draw" && "cursor-crosshair"
-                                    )}
-                                    style={{
-                                        aspectRatio: `${videoDimensions.width} / ${videoDimensions.height}`
-                                    }}
-                                >
-                                    <video
-                                        ref={videoRef}
-                                        src={videoSrc}
-                                        poster={poster}
-                                        className="w-full h-full object-cover"
-                                        onClick={() => {
-                                            if (reviewMode === "view") {
-                                                togglePlay();
-                                            }
-                                        }}
-                                        onPlay={() => setPlaying(true)}
-                                        onPause={() => setPlaying(false)}
-                                        controls={false}
-                                        playsInline
-                                    />
+                                {mediaError ? (
+                                    <div className="flex max-w-md flex-col items-center px-6 text-center text-white">
+                                        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 text-white">
+                                            <AlertTriangle className="h-7 w-7" />
+                                        </div>
+                                        <h2 className="mt-5 text-xl font-semibold">Preview not available</h2>
+                                        <p className="mt-2 text-sm text-white/70">
+                                            {mediaError} MOV files often use QuickTime codecs that Chrome and some other browsers cannot play.
+                                        </p>
+                                        {videoSrc ? (
+                                            <Button className="mt-6" variant="secondary" onClick={handleDownload}>
+                                                <Download className="h-4 w-4" />
+                                                Download video
+                                            </Button>
+                                        ) : null}
+                                    </div>
+                                ) : (
+                                    <>
+                                        {/* Aspect Ratio Wrapper */}
+                                        <div
+                                            ref={containerRef}
+                                            className={cn(
+                                                "relative max-h-full max-w-full shadow-2xl transition-opacity duration-300",
+                                                viewMode === "preview" && "opacity-0 pointer-events-none",
+                                                reviewMode === "comment" && "cursor-copy",
+                                                reviewMode === "draw" && "cursor-crosshair"
+                                            )}
+                                            style={{
+                                                aspectRatio: `${videoDimensions.width} / ${videoDimensions.height}`
+                                            }}
+                                        >
+                                            <video
+                                                ref={videoRef}
+                                                src={videoSrc}
+                                                poster={poster}
+                                                className="w-full h-full object-cover"
+                                                onClick={() => {
+                                                    if (reviewMode === "view") {
+                                                        togglePlay();
+                                                    }
+                                                }}
+                                                onError={handleMediaFailure}
+                                                onLoadedMetadata={() => setMediaError(null)}
+                                                onPlay={() => setPlaying(true)}
+                                                onPause={() => setPlaying(false)}
+                                                controls={false}
+                                                playsInline
+                                            />
 
                                     {/* Overlays - Now constrained to video size */}
                                     <TikTokOverlay visible={showTikTokPreview} />
@@ -462,14 +518,16 @@ export default function VideoPlayerWithAnnotations({
                                             />
                                         </div>
                                     ) : null}
-                                </div>
+                                        </div>
 
-                                {/* Dedicated Device Preview Mode */}
-                                <DedicatedDevicePreview
-                                    videoSrc={videoSrc}
-                                    videoRef={videoRef}
-                                    visible={viewMode === "preview"}
-                                />
+                                        {/* Dedicated Device Preview Mode */}
+                                        <DedicatedDevicePreview
+                                            videoSrc={videoSrc}
+                                            videoRef={videoRef}
+                                            visible={viewMode === "preview"}
+                                        />
+                                    </>
+                                )}
 
                                 {/* Floating Toolbar - Stays in the corner of the black area */}
                                 {/* <div className={cn(
@@ -501,7 +559,7 @@ export default function VideoPlayerWithAnnotations({
 
                             {/* Mobile controls - outside video */}
                             <div className="flex items-center gap-2 border-t bg-background px-3 py-2 md:hidden flex-shrink-0">
-                                <Button variant="ghost" size="icon" onClick={togglePlay} className="h-8 w-8 shrink-0">
+                                <Button variant="ghost" size="icon" onClick={togglePlay} disabled={!!mediaError} className="h-8 w-8 shrink-0">
                                     {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                                 </Button>
                                 <div className="min-w-0 rounded bg-muted px-2 py-1 text-xs tabular-nums">
@@ -540,14 +598,7 @@ export default function VideoPlayerWithAnnotations({
                                         onClick={(e) => {
                                             e.stopPropagation();
                                             e.preventDefault();
-                                            const storagePath = (asset as any)?.storage_path;
-                                            if (storagePath) {
-                                                const proxy = import.meta.env.VITE_ASSET_PUBLIC_BASE_URL || "";
-                                                const base = proxy.endsWith("/") ? proxy.slice(0, -1) : proxy;
-                                                const path = storagePath.startsWith("/") ? storagePath : `/${storagePath}`;
-                                                const url = `${base}${path}`;
-                                                void downloadFile(url, (asset as any)?.title || "video");
-                                            }
+                                            handleDownload();
                                         }}
                                     >
                                         <Download className="h-4 w-4" />
@@ -565,7 +616,7 @@ export default function VideoPlayerWithAnnotations({
 
                             {/* Desktop controls bar - outside video */}
                             <div className="hidden md:flex flex-wrap items-center gap-x-2 gap-y-2 border-t bg-background px-3 py-2 flex-shrink-0">
-                                <Button variant="ghost" size="icon" onClick={togglePlay}>
+                                <Button variant="ghost" size="icon" onClick={togglePlay} disabled={!!mediaError}>
                                     {playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
                                 </Button>
                                 <div className="text-xs tabular-nums bg-muted rounded px-2 py-1">
@@ -636,14 +687,7 @@ export default function VideoPlayerWithAnnotations({
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         e.preventDefault();
-                                                        const storagePath = (asset as any)?.storage_path;
-                                                        if (storagePath) {
-                                                            const proxy = import.meta.env.VITE_ASSET_PUBLIC_BASE_URL || "";
-                                                            const base = proxy.endsWith("/") ? proxy.slice(0, -1) : proxy;
-                                                            const path = storagePath.startsWith("/") ? storagePath : `/${storagePath}`;
-                                                            const url = `${base}${path}`;
-                                                            void downloadFile(url, (asset as any)?.title || "video");
-                                                        }
+                                                        handleDownload();
                                                     }}
                                                 >
                                                     <Download className="h-5 w-5" />

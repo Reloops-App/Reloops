@@ -199,7 +199,7 @@ async function run() {
     workspace_id: workspaceId,
   });
   assertCheck("get-preferences status", response.status === 200, response.text);
-  assertCheck("get-preferences default types", response.payload?.data?.preferences?.length === 12, JSON.stringify(response.payload));
+  assertCheck("get-preferences default types", response.payload?.data?.preferences?.length === 15, JSON.stringify(response.payload));
   assertCheck("get-preferences digest default", response.payload?.data?.digest_enabled === true, JSON.stringify(response.payload));
 
   response = await invokeNotifications(recipient.token, {

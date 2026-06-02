@@ -1,0 +1,7 @@
+interface:
+  display_name: "Reloops OSS API"
+  short_description: "Call Reloops OSS assigned-work and asset APIs from OpenClaw"
+  default_prompt: "Use $openclaw-reloops-api to manage Reloops OSS assigned review work, workspaces, projects, assets, comments, and shares through the API-key surface."
+
+policy:
+  allow_implicit_invocation: true

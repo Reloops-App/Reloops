@@ -1,0 +1,33 @@
+services:
+  reloops:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      FRONTEND_URL: ${FRONTEND_URL:-http://127.0.0.1:6173}
+      RELOOPS_HOST_PATH: ${RELOOPS_HOST_PATH:-${PWD}}
+      SUPABASE_API_PORT: ${SUPABASE_API_PORT:-56321}
+      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL:-http://127.0.0.1:56321}
+      SUPABASE_INTERNAL_URL: ${SUPABASE_INTERNAL_URL:-http://127.0.0.1:56321}
+      ASSET_AI_PROVIDER: ${ASSET_AI_PROVIDER:-mock}
+      ASSET_AI_MODEL: ${ASSET_AI_MODEL:-gpt-4.1-mini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ASSET_AI_WORKER_ID: ${ASSET_AI_WORKER_ID:-asset-ai-docker}
+      ASSET_AI_POLL_INTERVAL_MS: ${ASSET_AI_POLL_INTERVAL_MS:-5000}
+      ASSET_AI_LEASE_SECONDS: ${ASSET_AI_LEASE_SECONDS:-300}
+      ASSET_AI_MAX_CONCURRENT_JOBS: ${ASSET_AI_MAX_CONCURRENT_JOBS:-1}
+      ASSET_AI_OPENAI_TIMEOUT_MS: ${ASSET_AI_OPENAI_TIMEOUT_MS:-60000}
+      ASSET_AI_FFMPEG_TIMEOUT_MS: ${ASSET_AI_FFMPEG_TIMEOUT_MS:-30000}
+      ASSET_AI_FFPROBE_TIMEOUT_MS: ${ASSET_AI_FFPROBE_TIMEOUT_MS:-10000}
+      ASSET_AI_MAX_VIDEO_FRAMES: ${ASSET_AI_MAX_VIDEO_FRAMES:-3}
+      ASSET_AI_VIDEO_FRAME_WIDTH: ${ASSET_AI_VIDEO_FRAME_WIDTH:-720}
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:${RELOOPS_HOST_PATH:-${PWD}}
+      - supabase_temp:${RELOOPS_HOST_PATH:-${PWD}}/supabase/.temp
+    working_dir: ${RELOOPS_HOST_PATH:-${PWD}}
+    stop_grace_period: 30s
+
+volumes:
+  supabase_temp:

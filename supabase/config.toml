@@ -47,3 +47,21 @@ policy = "oneshot"
 
 [functions.share]
 verify_jwt = false
+
+[functions.assigned-items]
+verify_jwt = false
+
+[functions.api-workspaces]
+verify_jwt = false
+
+[functions.api-projects]
+verify_jwt = false
+
+[functions.api-assets]
+verify_jwt = false
+
+[functions.api-comments]
+verify_jwt = false
+
+[functions.api-shares]
+verify_jwt = false

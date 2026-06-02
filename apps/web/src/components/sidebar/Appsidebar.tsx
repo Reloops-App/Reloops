@@ -119,7 +119,8 @@ function computeQuickViewCounts(rows: any[]): QuickViewCounts {
 
   const counts = { ...emptyQuickViewCounts }
   for (const asset of byRoot.values()) {
-    const status = String(asset.status ?? "none")
+    const status = String(asset.status ?? "none").toLowerCase()
+    if (status === "deleted") continue
     const mime = assetMime(asset)
     counts.all += 1
     if (status === "needs_review") counts.needsReview += 1

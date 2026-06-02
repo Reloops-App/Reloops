@@ -194,7 +194,9 @@ export function DedicatedDevicePreview({ videoSrc, videoRef, visible }: Dedicate
             if (mainVideo.paused && !previewVideo.paused) {
                 previewVideo.pause();
             } else if (!mainVideo.paused && previewVideo.paused) {
-                void previewVideo.play();
+                previewVideo.play().catch((error) => {
+                    console.warn("Device preview playback failed", error);
+                });
             }
         };
 

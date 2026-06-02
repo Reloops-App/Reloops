@@ -16,9 +16,9 @@ function assert(condition, message) {
 }
 
 const env = readEnv();
-const url = env.SUPABASE_URL || env.URL_SUPABASE;
-const anonKey = env.SUPABASE_ANON_KEY || env.ANON_KEY;
-const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY || env.SERVICE_ROLE_KEY;
+const url = process.env.SUPABASE_URL || process.env.URL_SUPABASE || env.SUPABASE_URL || env.URL_SUPABASE;
+const anonKey = process.env.SUPABASE_ANON_KEY || process.env.ANON_KEY || env.SUPABASE_ANON_KEY || env.ANON_KEY;
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_ROLE_KEY || env.SERVICE_ROLE_KEY;
 
 assert(url && anonKey && serviceKey, "local Supabase env is present");
 
@@ -44,6 +44,20 @@ const authHeaders = {
   apikey: anonKey,
   authorization: `Bearer ${signedIn.data.session.access_token}`,
 };
+
+async function assertBucketReady(id, expectedPublic) {
+  const { data, error } = await admin.storage.getBucket(id);
+  if (error) throw error;
+  assert(data?.id === id, `${id} storage bucket exists`);
+  if (typeof data?.public === "boolean") {
+    assert(data.public === expectedPublic, `${id} storage bucket visibility is configured`);
+  }
+}
+
+await assertBucketReady("assets", false);
+await assertBucketReady("thumbnails", true);
+await assertBucketReady("avatars", true);
+await assertBucketReady("workspaces", true);
 
 async function invokeFunction(name, body, method = "POST") {
   const res = await fetch(`${url}/functions/v1/${name}`, {
@@ -113,6 +127,14 @@ const folderCreate = await invokeFunction("asset", {
 });
 assert(folderCreate.data?.id, "folder create function works");
 
+const duplicateFolderCreate = await invokeFunction("asset", {
+  action: "create_folder",
+  workspace_id: workspace.id,
+  project_id: project.id,
+  name: "Runtime Smoke Folder",
+});
+assert(duplicateFolderCreate.data?.id === folderCreate.data.id, "folder create is idempotent");
+
 const folderList = await invokeFunction("asset", {
   action: "list_folders",
   workspace_id: workspace.id,
@@ -161,6 +183,40 @@ const assetUpdate = await invokeFunction("asset", {
 });
 assert(assetUpdate.data?.title === "runtime-smoke-renamed.txt", "asset update function works");
 
+const detachObjectId = crypto.randomUUID();
+const detachStoragePath = `${workspace.id}/${project.id}/${detachObjectId}.txt`;
+const detachFile = new Blob(["detachable asset"], { type: "text/plain" });
+const detachUpload = await client.storage.from("assets").upload(detachStoragePath, detachFile, {
+  contentType: "text/plain",
+});
+if (detachUpload.error) throw detachUpload.error;
+const { data: detachableAsset, error: detachableAssetError } = await client
+  .from("assets")
+  .insert({
+    workspace_id: workspace.id,
+    project_id: project.id,
+    title: "runtime-smoke-detachable.txt",
+    storage_path: detachStoragePath,
+    mime_type: "text/plain",
+    size_bytes: detachFile.size,
+  })
+  .select("*")
+  .single();
+if (detachableAssetError) throw detachableAssetError;
+const detached = await invokeFunction("asset", {
+  action: "detach_project",
+  project_id: project.id,
+  asset_id: detachableAsset.id,
+});
+assert(detached.data?.removed_asset_ids?.includes(detachableAsset.id), "asset detach project function works");
+const { data: detachedRow, error: detachedRowError } = await client
+  .from("assets")
+  .select("project_id,folder_id")
+  .eq("id", detachableAsset.id)
+  .single();
+if (detachedRowError) throw detachedRowError;
+assert(detachedRow?.project_id === null && detachedRow?.folder_id === null, "asset detach clears project assignment");
+
 const { data: comment, error: commentError } = await client
   .from("asset_comments")
   .insert({
@@ -189,13 +245,95 @@ async function uploadPublicBucket(bucket, path) {
   assert(result.data?.path === path, `${bucket} storage upload works`);
 }
 
-await uploadPublicBucket("avatars", `${created.data.user.id}/avatar.txt`);
-await uploadPublicBucket("workspaces", `${workspace.id}/workspace.txt`);
+await uploadPublicBucket("thumbnails", `${workspace.id}/${asset.id}/thumbnail.txt`);
+await uploadPublicBucket("avatars", `avatars/${created.data.user.id}/avatar.txt`);
+await uploadPublicBucket("workspaces", `workspace_${workspace.id}/workspace.txt`);
+await uploadPublicBucket("workspaces", `collection_headers/${workspace.id}/runtime-smoke/icon.txt`);
 
 const mentionable = await invokeFunction("get-mentionable-users", {
   organizationId: boot.data.organization_id,
 });
 assert(Array.isArray(mentionable.data) && mentionable.data.length > 0, "mentionable users function works");
+
+const { data: notification, error: notificationError } = await admin
+  .from("notifications")
+  .insert({
+    workspace_id: workspace.id,
+    project_id: project.id,
+    asset_id: asset.id,
+    recipient_user_id: created.data.user.id,
+    notification_type: "asset.intelligence_completed",
+    title: "Runtime intelligence completed",
+    message: "Runtime smoke notification",
+    target_url: `/workspace/${workspace.id}/projects/${project.id}/assets/${asset.id}`,
+    metadata: { asset_title: asset.title },
+  })
+  .select("id")
+  .single();
+if (notificationError) throw notificationError;
+assert(notification?.id, "notification insert works");
+
+const notificationCount = await invokeFunction("notifications", {
+  action: "unread-count",
+  workspace_id: workspace.id,
+});
+assert(notificationCount.data?.count >= 1, "notifications unread count works");
+
+const notificationList = await invokeFunction("notifications", {
+  action: "list",
+  workspace_id: workspace.id,
+  status: "unread",
+  type: "asset.intelligence_completed",
+});
+assert(
+  Array.isArray(notificationList.data) && notificationList.data.some((row) => row.id === notification.id),
+  "notifications list includes intelligence notification",
+);
+
+const notificationRead = await invokeFunction("notifications", {
+  action: "mark-read",
+  workspace_id: workspace.id,
+  notification_id: notification.id,
+});
+assert(notificationRead.data?.read_at, "notifications mark read works");
+
+const apiKeyCreate = await invokeFunction("api-keys", {
+  action: "create",
+  organization_id: boot.data.organization_id,
+  name: "Runtime Smoke OpenClaw",
+  provider: "openclaw",
+});
+assert(apiKeyCreate.data?.raw_key?.startsWith("reloops_live_"), "agent api key create works");
+
+const agentUploadBody = new FormData();
+const agentUploadFile = new Blob(["agent uploaded asset"], { type: "text/plain" });
+agentUploadBody.append("workspace_id", workspace.id);
+agentUploadBody.append("project_id", project.id);
+agentUploadBody.append("title", "runtime-smoke-agent-upload.txt");
+agentUploadBody.append("tags", JSON.stringify(["agent", "upload"]));
+agentUploadBody.append("file", agentUploadFile, "runtime-smoke-agent-upload.txt");
+
+const agentUploadRes = await fetch(`${url}/functions/v1/api-assets/upload`, {
+  method: "POST",
+  headers: {
+    apikey: anonKey,
+    authorization: `Bearer ${apiKeyCreate.data.raw_key}`,
+  },
+  body: agentUploadBody,
+});
+const agentUploadPayload = await agentUploadRes.json();
+if (!agentUploadRes.ok || !agentUploadPayload.data?.id) {
+  throw new Error(`agent api upload creates asset (${agentUploadRes.status}: ${JSON.stringify(agentUploadPayload)})`);
+}
+assert(true, "agent api upload creates asset");
+assert(agentUploadPayload.data?.storage_path, "agent api upload returns storage path");
+assert(agentUploadPayload.data?.download_url, "agent api upload returns download url");
+
+const { data: agentUploadedObject, error: agentUploadedObjectError } = await admin.storage
+  .from("assets")
+  .download(agentUploadPayload.data.storage_path);
+if (agentUploadedObjectError) throw agentUploadedObjectError;
+assert(await agentUploadedObject.text() === "agent uploaded asset", "agent api upload writes Supabase storage object");
 
 const secondObjectId = crypto.randomUUID();
 const secondStoragePath = `${workspace.id}/${project.id}/${secondObjectId}.txt`;
@@ -305,7 +443,7 @@ const shareGet = await fetch(`${url}/functions/v1/share?token=${token}`, {
   headers: { apikey: anonKey },
 });
 const sharePayload = await shareGet.json();
-assert(shareGet.ok && sharePayload.asset?.id === asset.id, "share function reads shared asset");
+assert(shareGet.ok && sharePayload.assets?.id === asset.id, "share function reads shared asset");
 assert(Boolean(sharePayload.fileUrl), "share function returns signed file URL");
 
 const sharePost = await fetch(`${url}/functions/v1/share?token=${token}`, {
