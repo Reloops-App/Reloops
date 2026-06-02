@@ -7,6 +7,7 @@ import {
     generateThumbnailBlob,
     isSuspiciouslySmall,
     getRelativeFilePath,
+    inferFileContentType,
 } from "@/components/file-upload-utils";
 import { invokeEdgeFunction } from "@/api/edge";
 import { supabase } from "@/lib/supabaseClient";
@@ -37,7 +38,7 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
     const folderCacheLoadedRef = useRef(false);
 
     function overLimit(file: File) {
-        return file.size > maxBytesForMime(file.type || "application/octet-stream");
+        return file.size > maxBytesForMime(inferFileContentType(file));
     }
 
     function folderKey(parentId: string | null, name: string) {
@@ -117,6 +118,7 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
             .filter((f) => f.size > 0 && !!f.name)
             .map((f) => {
                 const check = isSuspiciouslySmall(f);
+                const contentType = inferFileContentType(f);
                 return {
                     id: uid(),
                     uploadNonce: crypto.randomUUID(),
@@ -124,14 +126,14 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
                     uploadBatchTotal,
                     file: f,
                     name: f.name,
-                    type: f.type || "application/octet-stream",
+                    type: contentType,
                     size: f.size,
                     relativePath: getRelativeFilePath(f),
                     folderId: getRelativeFilePath(f) ? undefined : (folderId ?? null),
                     progress: 0,
                     status: (overLimit(f) || check.suspicious) ? "error" : "queued",
                     errorMessage: overLimit(f)
-                        ? `File exceeds limit (${Math.round(maxBytesForMime(f.type || "application/octet-stream") / 1024 / 1024)}MB).`
+                        ? `File exceeds limit (${Math.round(maxBytesForMime(contentType) / 1024 / 1024)}MB).`
                         : check.suspicious ? check.message : undefined,
                 } as UploadItem;
             });
@@ -169,7 +171,7 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
             const { error: uploadError } = await supabase.storage
                 .from("assets")
                 .upload(objectKey, item.file, {
-                    contentType: item.type || "application/octet-stream",
+                    contentType: item.type,
                     upsert: false,
                 });
             if (uploadError) throw uploadError;
@@ -199,7 +201,7 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
                 storage_path: objectKey,
                 cover_image_url: coverUrl,
                 thumbnail_path: thumbnailPath,
-                mime_type: item.type || "application/octet-stream",
+                mime_type: item.type,
                 size_bytes: item.size,
                 uploaded_by: (await supabase.auth.getUser()).data.user?.id ?? null,
                 upload_batch_id: item.uploadBatchId ?? null,
@@ -219,7 +221,7 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
             onUploaded?.({
                 id: assetId,
                 name: item.name,
-                type: item.type || "application/octet-stream",
+                type: item.type,
                 sizeBytes: item.size,
                 coverUrl: coverUrl ?? undefined,
                 url: objectKey,
