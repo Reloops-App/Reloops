@@ -14,7 +14,7 @@
 <div align="center">
   <strong>
   <h2>Your open-source creative asset workspace for teams and AI agents</h2><br />
-  Reloops: An alternative to Brandfolder, Bynder, Canto, Frame.io, Dropbox Replay, Ziflow, Filestage, Google Drive, Airtable, and internal DAM tools.<br /><br />
+  Reloops: An alternative to Frame.io, Brandfolder, Bynder, Canto, Dropbox Replay, Ziflow, Filestage, Google Drive, Airtable, and internal DAM tools.<br /><br />
   </strong>
   Reloops offers everything you need to organize creative assets,<br />generate AI descriptions and tags, manage versions, collect approvals, share collections, and let agents work inside your media library.
 </div>
