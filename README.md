@@ -41,15 +41,20 @@
 <p align="center">
   <br />
   <a href="docs/SETUP.md" rel="dofollow"><strong>Start locally »</strong></a>
-  <br />
-
-  <br />
+  &nbsp;·&nbsp;
   <a href="#intro" rel="dofollow"><strong>See what Reloops does »</strong></a>
+  <br />
+  <br />
+  <a href="https://discord.gg/sas5PUPqN" rel="dofollow">
+    <img src="https://img.shields.io/badge/Join%20the%20Reloops%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join the Reloops Discord">
+  </a>
   <br />
 </p>
 
 <p align="center">
   <a href="docs/SETUP.md">Quick Start</a>
+  ·
+  <a href="https://discord.gg/sas5PUPqN">Discord</a>
   ·
   <a href="docs/openclaw-reloops-api.md">OpenClaw API Skill</a>
   ·
