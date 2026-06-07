@@ -1,0 +1,57 @@
+name: Update clone stats
+
+# Requires a repository secret named TRAFFIC_PAT with Administration: read
+# access for this repository.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-clone-stats:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch GitHub clone traffic
+        env:
+          TRAFFIC_PAT: ${{ secrets.TRAFFIC_PAT }}
+        run: |
+          if [ -z "$TRAFFIC_PAT" ]; then
+            echo "::error::Missing TRAFFIC_PAT secret with Administration: read access for this repository."
+            exit 1
+          fi
+
+          curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $TRAFFIC_PAT" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/traffic/clones" \
+            > traffic-clones.json
+
+      - name: Merge clone stats
+        env:
+          TRAFFIC_JSON_PATH: traffic-clones.json
+          STATS_JSON_PATH: clone-stats.json
+          OUTPUT_JSON_PATH: clone-stats.json
+        run: node scripts/update-clone-stats.mjs
+
+      - name: Commit updated clone stats
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add clone-stats.json
+
+          if git diff --cached --quiet; then
+            echo "No clone stats changes."
+            exit 0
+          fi
+
+          git commit -m "Update clone stats [skip ci]"
+          git push

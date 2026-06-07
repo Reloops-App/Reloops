@@ -8,6 +8,9 @@
 <a href="https://opensource.org/license/agpl-v3">
   <img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg" alt="License">
 </a>
+<a href="https://github.com/Reloops-App/reloops/graphs/traffic">
+  <img src="https://img.shields.io/badge/dynamic/json?color=brightgreen&label=Total%20clones&query=%24.totalClones&url=https%3A%2F%2Fraw.githubusercontent.com%2FReloops-App%2Freloops%2Fmain%2Fclone-stats.json&logo=github" alt="Tracked total GitHub clones">
+</a>
 </p>
 
 <h3 align="center"><strong><a href="docs/SETUP.md">NEW: run the open-source Reloops DAM locally in minutes</a></strong></h3>
