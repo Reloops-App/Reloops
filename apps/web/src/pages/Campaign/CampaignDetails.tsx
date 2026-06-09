@@ -147,6 +147,10 @@ type DestinationFolderDraftTarget = {
   projectId: string;
   parentFolderId: string | null;
 };
+type DestinationTreeScrollTarget = {
+  type: "project" | "folder";
+  id: string;
+};
 type SearchIndexField = {
   label: string;
   value: string;
@@ -867,7 +871,10 @@ export default function CampaignDetails({
   const [destinationFolderDraftName, setDestinationFolderDraftName] = useState("");
   const [creatingDestinationFolder, setCreatingDestinationFolder] = useState(false);
   const [runningBulkProjectAction, setRunningBulkProjectAction] = useState(false);
+  const destinationSearchInputRef = useRef<HTMLInputElement | null>(null);
   const destinationFolderInputRef = useRef<HTMLInputElement | null>(null);
+  const destinationScrollAreaRef = useRef<HTMLDivElement | null>(null);
+  const destinationPendingScrollRef = useRef<DestinationTreeScrollTarget | null>(null);
   const [libraryAssets, setLibraryAssets] = useState<Asset[]>([]);
   const [loadingLibraryAssets, setLoadingLibraryAssets] = useState(false);
   const [librarySearch, setLibrarySearch] = useState("");
@@ -2411,19 +2418,27 @@ export default function CampaignDetails({
   }, [ensureDestinationPathExpanded]);
 
   function toggleDestinationProjectExpanded(projectId: string) {
-    setExpandedDestinationProjectIds((prev) => (
-      prev.includes(projectId)
+    setExpandedDestinationProjectIds((prev) => {
+      const isExpanded = prev.includes(projectId);
+      if (!isExpanded) {
+        destinationPendingScrollRef.current = { type: "project", id: projectId };
+      }
+      return isExpanded
         ? prev.filter((value) => value !== projectId)
-        : [...prev, projectId]
-    ));
+        : [...prev, projectId];
+    });
   }
 
   function toggleDestinationFolderExpanded(folderId: string) {
-    setExpandedDestinationFolderIds((prev) => (
-      prev.includes(folderId)
+    setExpandedDestinationFolderIds((prev) => {
+      const isExpanded = prev.includes(folderId);
+      if (!isExpanded) {
+        destinationPendingScrollRef.current = { type: "folder", id: folderId };
+      }
+      return isExpanded
         ? prev.filter((value) => value !== folderId)
-        : [...prev, folderId]
-    ));
+        : [...prev, folderId];
+    });
   }
 
   function startDestinationFolderCreate(projectId: string, parentFolderId: string | null) {
@@ -2456,6 +2471,16 @@ export default function CampaignDetails({
         ...prev.filter((folder) => folder.id !== data.data!.id),
         data.data!,
       ]);
+      if (String(destinationFolderDraftTarget.projectId) === String(project.id)) {
+        setFolders((prev) => [
+          ...prev.filter((folder) => folder.id !== data.data!.id),
+          data.data!,
+        ]);
+        setProjectFolderIds((prev) => Array.from(new Set([...prev, data.data!.id])));
+      }
+      window.dispatchEvent(new CustomEvent("asset-folders:changed", {
+        detail: { workspaceId, projectId: destinationFolderDraftTarget.projectId, folderId: data.data.id },
+      }));
       selectDestinationLocation(destinationFolderDraftTarget.projectId, data.data.id);
       setDestinationFolderDraftTarget(null);
       setDestinationFolderDraftName("");
@@ -2517,21 +2542,157 @@ export default function CampaignDetails({
     }
   }
 
+  async function undoBulkMove({
+    sourceProjectId,
+    targetProjectId,
+    assetRootIds,
+    folderIds,
+    assetFolderByRootId,
+    folderParentById,
+  }: {
+    sourceProjectId: string;
+    targetProjectId: string;
+    assetRootIds: string[];
+    folderIds: string[];
+    assetFolderByRootId: Map<string, string | null>;
+    folderParentById: Map<string, string | null>;
+  }) {
+    const groupByDestination = (ids: string[], getDestinationId: (id: string) => string | null) => {
+      const grouped = new Map<string | null, string[]>();
+      for (const id of ids) {
+        const destinationId = getDestinationId(id);
+        grouped.set(destinationId, [...(grouped.get(destinationId) ?? []), id]);
+      }
+      return grouped;
+    };
+
+    try {
+      const assetGroups = groupByDestination(assetRootIds, (rootId) => assetFolderByRootId.get(rootId) ?? null);
+      for (const [folderId, rootIds] of assetGroups.entries()) {
+        if (String(targetProjectId) === String(sourceProjectId)) {
+          for (const rootId of rootIds) {
+            const { error } = await invokeEdgeFunction("asset", {
+              body: {
+                action: "move_stack_to_folder",
+                asset_id: rootId,
+                folder_id: folderId,
+                project_id: sourceProjectId,
+              },
+            });
+            if (error) throw error;
+          }
+        } else {
+          const { error } = await invokeEdgeFunction("asset", {
+            body: {
+              action: "move_to_project_bulk",
+              source_project_id: targetProjectId,
+              target_project_id: sourceProjectId,
+              asset_root_ids: rootIds,
+              destination_folder_id: folderId,
+            },
+          });
+          if (error) throw error;
+        }
+      }
+
+      const folderGroups = groupByDestination(folderIds, (folderId) => folderParentById.get(folderId) ?? null);
+      for (const [parentFolderId, groupedFolderIds] of folderGroups.entries()) {
+        if (String(targetProjectId) === String(sourceProjectId)) {
+          for (const folderId of groupedFolderIds) {
+            const { error } = await invokeEdgeFunction("asset", {
+              body: {
+                action: "move_folder",
+                folder_id: folderId,
+                parent_folder_id: parentFolderId,
+              },
+            });
+            if (error) throw error;
+          }
+        } else {
+          const { error } = await invokeEdgeFunction("asset", {
+            body: {
+              action: "move_folders_to_project_bulk",
+              source_project_id: targetProjectId,
+              target_project_id: sourceProjectId,
+              folder_ids: groupedFolderIds,
+              destination_folder_id: parentFolderId,
+            },
+          });
+          if (error) throw error;
+        }
+      }
+
+      await reloadProjectView();
+      toast.success(`Move undone. Restored ${assetRootIds.length + folderIds.length} item${assetRootIds.length + folderIds.length === 1 ? "" : "s"} to ${project.name}.`);
+    } catch (err) {
+      console.error("Failed to undo bulk move", err);
+      toast.error("Could not undo move");
+    }
+  }
+
+  async function undoBulkCopy({
+    targetProjectId,
+    copiedRootIds,
+    targetProjectName,
+  }: {
+    targetProjectId: string;
+    copiedRootIds: string[];
+    targetProjectName: string;
+  }) {
+    try {
+      for (const rootId of copiedRootIds) {
+        const { error } = await invokeEdgeFunction("asset", {
+          body: {
+            action: "delete_asset_stack",
+            project_id: targetProjectId,
+            asset_id: rootId,
+          },
+        });
+        if (error) throw error;
+      }
+
+      if (String(targetProjectId) === String(project.id)) {
+        await reloadProjectView();
+      }
+
+      toast.success(`Copy undone. Removed ${copiedRootIds.length} asset${copiedRootIds.length === 1 ? "" : "s"} from ${targetProjectName}.`);
+    } catch (err) {
+      console.error("Failed to undo bulk copy", err);
+      toast.error("Could not undo copy");
+    }
+  }
+
   async function handleBulkProjectAction() {
     if (!selectedDestinationProjectId) return;
     if (selectedDestinationIsBlocked) return;
+    if (selectedDestinationIsUnchanged) return;
 
     const targetProject = destinationProjects.find(
       (workspaceProject) => String(workspaceProject.id) === String(selectedDestinationProjectId),
     );
     const movingInsideCurrentProject = bulkProjectActionMode === "move"
       && String(selectedDestinationProjectId) === String(project.id);
+    const originalAssetFolderByRootId = new Map<string, string | null>();
+    const originalFolderParentById = new Map<string, string | null>();
+
+    for (const rootId of selectedRootIds) {
+      const rootAsset = assets.find((asset) => rootIdOf(asset) === rootId && !asset.parent_asset_id);
+      if (rootAsset) originalAssetFolderByRootId.set(rootId, rootAsset.folder_id ?? null);
+    }
+
+    for (const folderId of selectedFolderIds) {
+      const folder = foldersById.get(folderId);
+      if (folder) originalFolderParentById.set(folderId, folder.parent_folder_id ?? null);
+    }
 
     setRunningBulkProjectAction(true);
     try {
       let completedAssets = 0;
       let skippedAssets = 0;
       let movedFolders = 0;
+      const movedAssetRootIds: string[] = [];
+      const movedFolderIds: string[] = [];
+      const copiedAssetRootIds: string[] = [];
 
       if (movingInsideCurrentProject) {
         for (const rootId of selectedRootIds) {
@@ -2552,6 +2713,7 @@ export default function CampaignDetails({
 
           if (error) throw error;
           completedAssets += 1;
+          movedAssetRootIds.push(rootId);
         }
 
         for (const folderId of selectedFolderIds) {
@@ -2573,6 +2735,7 @@ export default function CampaignDetails({
 
           if (error) throw error;
           movedFolders += 1;
+          movedFolderIds.push(folderId);
         }
       } else if (selectedRootIds.length > 0) {
         const action = bulkProjectActionMode === "move"
@@ -2590,7 +2753,7 @@ export default function CampaignDetails({
             source_project_id: project.id,
             target_project_id: selectedDestinationProjectId,
             asset_root_ids: selectedRootIds,
-            destination_folder_id: bulkProjectActionMode === "move" ? selectedDestinationFolderId : null,
+            destination_folder_id: selectedDestinationFolderId,
           },
         });
 
@@ -2599,6 +2762,11 @@ export default function CampaignDetails({
         completedAssets += bulkProjectActionMode === "move"
           ? (data?.data?.moved_root_ids?.length ?? 0)
           : (data?.data?.copied_root_ids?.length ?? 0);
+        if (bulkProjectActionMode === "move") {
+          movedAssetRootIds.push(...(data?.data?.moved_root_ids ?? []));
+        } else {
+          copiedAssetRootIds.push(...(data?.data?.copied_root_ids ?? []));
+        }
         skippedAssets += data?.data?.skipped_root_ids?.length ?? 0;
       }
 
@@ -2619,24 +2787,59 @@ export default function CampaignDetails({
 
         if (error) throw error;
         movedFolders += data?.data?.moved_folder_ids?.length ?? 0;
+        movedFolderIds.push(...(data?.data?.moved_folder_ids ?? []));
       }
 
-      if (bulkProjectActionMode === "move") {
+      if (bulkProjectActionMode === "move" || String(selectedDestinationProjectId) === String(project.id)) {
         await reloadProjectView();
       }
 
-      const targetLabel = selectedDestinationPathLabel || targetProject?.name || "the destination project";
+      const targetLabel = bulkProjectActionMode === "copy"
+        ? (destinationSummaryPathLabel || targetProject?.name || "the destination project")
+        : (destinationSummaryPathLabel || targetProject?.name || "the destination project");
       const baseVerb = bulkProjectActionMode === "move" ? "Moved" : "Copied";
 
       if ((completedAssets + movedFolders) > 0) {
         const summaryParts: string[] = [];
         if (completedAssets > 0) {
-          summaryParts.push(`${completedAssets} ${completedAssets === 1 ? "asset stack" : "asset stacks"}`);
+          summaryParts.push(`${completedAssets} ${bulkProjectActionMode === "move" ? (completedAssets === 1 ? "asset stack" : "asset stacks") : (completedAssets === 1 ? "asset" : "assets")}`);
         }
         if (movedFolders > 0) {
           summaryParts.push(`${movedFolders} ${movedFolders === 1 ? "folder" : "folders"}`);
         }
-        toast.success(`${baseVerb} ${summaryParts.join(" and ")} to ${targetLabel}.`);
+        const successMessage = `${baseVerb} ${summaryParts.join(" and ")} to ${targetLabel}.`;
+        if (bulkProjectActionMode === "move") {
+          const undoAssetFolderByRootId = new Map(originalAssetFolderByRootId);
+          const undoFolderParentById = new Map(originalFolderParentById);
+          const undoTargetProjectId = String(selectedDestinationProjectId);
+          toast.success(successMessage, {
+            action: {
+              label: "Undo",
+              onClick: () => void undoBulkMove({
+                sourceProjectId: project.id,
+                targetProjectId: undoTargetProjectId,
+                assetRootIds: [...movedAssetRootIds],
+                folderIds: [...movedFolderIds],
+                assetFolderByRootId: undoAssetFolderByRootId,
+                folderParentById: undoFolderParentById,
+              }),
+            },
+          });
+        } else {
+          const undoCopiedRootIds = [...copiedAssetRootIds];
+          const undoTargetProjectId = String(selectedDestinationProjectId);
+          const undoTargetProjectName = targetProject?.name ?? "the destination project";
+          toast.success(successMessage, {
+            action: {
+              label: "Undo",
+              onClick: () => void undoBulkCopy({
+                targetProjectId: undoTargetProjectId,
+                copiedRootIds: undoCopiedRootIds,
+                targetProjectName: undoTargetProjectName,
+              }),
+            },
+          });
+        }
       } else if (skippedAssets > 0) {
         toast.error(`Nothing changed. The selected assets are already in ${targetLabel} or unavailable.`);
       }
@@ -2786,10 +2989,8 @@ export default function CampaignDetails({
   }, [attachedRootIds, libraryAssets, librarySearch]);
 
   const destinationProjects = useMemo(
-    () => bulkProjectActionMode === "move"
-      ? workspaceProjects
-      : workspaceProjects.filter((workspaceProject) => String(workspaceProject.id) !== String(project.id)),
-    [bulkProjectActionMode, project.id, workspaceProjects],
+    () => workspaceProjects,
+    [workspaceProjects],
   );
   const destinationProjectIdSet = useMemo(
     () => new Set(destinationProjects.map((workspaceProject) => String(workspaceProject.id))),
@@ -2855,6 +3056,10 @@ export default function CampaignDetails({
       return primaryProjectId === String(project.id) || primaryProjectId === String(targetProjectId);
     });
   }, [bulkProjectActionMode, project.id, selectedFolderIds.length, selectedRootAssets]);
+  const canUseDestinationProjectFolders = React.useCallback((targetProjectId: string) => {
+    if (bulkProjectActionMode === "copy") return selectedAssetCount > 0 && selectedFolderCount === 0;
+    return canMoveSelectionIntoProjectFolders(targetProjectId);
+  }, [bulkProjectActionMode, canMoveSelectionIntoProjectFolders, selectedAssetCount, selectedFolderCount]);
   const destinationVisibilityByProject = useMemo(() => {
     const visibility = new Map<string, { projectVisible: boolean; visibleFolderIds: Set<string> }>();
 
@@ -2862,7 +3067,7 @@ export default function CampaignDetails({
       const projectId = String(workspaceProject.id);
       const childrenByParent = destinationChildFoldersByProject.get(projectId) ?? new Map<string | null, FolderRow[]>();
       const visibleFolderIds = new Set<string>();
-      const canUseFolders = canMoveSelectionIntoProjectFolders(projectId);
+      const canUseFolders = canUseDestinationProjectFolders(projectId);
 
       const visit = (folder: FolderRow): boolean => {
         const matchesSelf = !destinationSearchQuery || folder.name.toLowerCase().includes(destinationSearchQuery);
@@ -2875,14 +3080,14 @@ export default function CampaignDetails({
         return isVisible;
       };
 
-      if (bulkProjectActionMode === "move" && canUseFolders) {
+      if (canUseFolders) {
         for (const rootFolder of childrenByParent.get(null) ?? []) {
           visit(rootFolder);
         }
       }
 
       const matchesProject = !destinationSearchQuery || workspaceProject.name.toLowerCase().includes(destinationSearchQuery);
-      const projectVisible = bulkProjectActionMode === "move"
+      const projectVisible = canUseFolders
         ? (matchesProject || visibleFolderIds.size > 0)
         : matchesProject;
 
@@ -2890,7 +3095,7 @@ export default function CampaignDetails({
     }
 
     return visibility;
-  }, [bulkProjectActionMode, canMoveSelectionIntoProjectFolders, destinationChildFoldersByProject, destinationProjects, destinationSearchQuery]);
+  }, [canUseDestinationProjectFolders, destinationChildFoldersByProject, destinationProjects, destinationSearchQuery]);
   const selectedDestinationProject = useMemo(
     () => destinationProjects.find((workspaceProject) => String(workspaceProject.id) === String(selectedDestinationProjectId)) ?? null,
     [destinationProjects, selectedDestinationProjectId],
@@ -2901,9 +3106,100 @@ export default function CampaignDetails({
     const folderParts = folderPathParts(selectedDestinationFolderId, destinationFoldersById);
     return [destinationProjectName, ...folderParts].join(" / ");
   }, [destinationFoldersById, selectedDestinationFolderId, selectedDestinationProject, selectedDestinationProjectId]);
+  const copyDestinationPathLabel = selectedDestinationProjectId
+    ? selectedDestinationFolderId
+      ? selectedDestinationPathLabel
+      : `${selectedDestinationProject?.name ?? "Selected project"} / Project root`
+    : "";
+  const destinationSummaryPathLabel = bulkProjectActionMode === "copy"
+    ? copyDestinationPathLabel
+    : selectedDestinationPathLabel;
+  const primaryBulkProjectActionLabel = bulkProjectActionMode === "move"
+    ? "Move here"
+    : selectedDestinationFolderId
+    ? `Copy to ${destinationFoldersById.get(selectedDestinationFolderId)?.name ?? "folder"}`
+    : selectedDestinationProject
+    ? `Copy to ${selectedDestinationProject.name}`
+    : "Copy to destination";
   const selectedDestinationIsBlocked = bulkProjectActionMode === "move"
     && String(selectedDestinationProjectId) === String(project.id)
     && isBlockedCurrentProjectDestination(selectedDestinationFolderId);
+
+  const currentSelectionLocationLabel = useMemo(() => {
+    const locationIds = new Set<string | null>();
+
+    for (const rootId of selectedRootIds) {
+      const rootAsset = assets.find((asset) => rootIdOf(asset) === rootId && !asset.parent_asset_id);
+      if (rootAsset) locationIds.add(rootAsset.folder_id ?? null);
+    }
+
+    for (const folderId of selectedFolderIds) {
+      const folder = foldersById.get(folderId);
+      if (folder) locationIds.add(folder.parent_folder_id ?? null);
+    }
+
+    if (locationIds.size === 1) {
+      const [folderId] = Array.from(locationIds);
+      return [project.name, ...folderPathParts(folderId, foldersById)].join(" / ");
+    }
+
+    if (locationIds.size > 1) return `${project.name} / multiple locations`;
+
+    return [project.name, ...currentFolderTrail.map((folder) => folder.name)].join(" / ");
+  }, [assets, currentFolderTrail, foldersById, project.name, selectedFolderIds, selectedRootIds]);
+
+  const selectedDestinationIsUnchanged = useMemo(() => {
+    if (!selectedDestinationProjectId || String(selectedDestinationProjectId) !== String(project.id)) return false;
+    if (totalSelectedCount === 0) return false;
+
+    const assetsAlreadyThere = selectedRootIds.every((rootId) => {
+      const rootAsset = assets.find((asset) => rootIdOf(asset) === rootId && !asset.parent_asset_id);
+      return Boolean(rootAsset) && (rootAsset?.folder_id ?? null) === selectedDestinationFolderId;
+    });
+    if (bulkProjectActionMode === "copy") {
+      return selectedRootIds.length > 0 && assetsAlreadyThere;
+    }
+
+    if (bulkProjectActionMode !== "move") return false;
+    const foldersAlreadyThere = selectedFolderIds.every((folderId) => {
+      const folder = foldersById.get(folderId);
+      return Boolean(folder) && (folder?.parent_folder_id ?? null) === selectedDestinationFolderId;
+    });
+
+    return assetsAlreadyThere && foldersAlreadyThere;
+  }, [
+    assets,
+    bulkProjectActionMode,
+    foldersById,
+    project.id,
+    selectedDestinationFolderId,
+    selectedDestinationProjectId,
+    selectedFolderIds,
+    selectedRootIds,
+    totalSelectedCount,
+  ]);
+
+  const canCreateDestinationFolder = Boolean(
+    selectedDestinationProjectId
+      && !selectedDestinationIsBlocked
+      && canUseDestinationProjectFolders(selectedDestinationProjectId),
+  );
+  const destinationActionDisabledReason = !selectedDestinationProjectId
+    ? "Choose a destination project to continue."
+    : selectedDestinationIsBlocked
+    ? "Choose a destination outside the selected folders."
+    : selectedDestinationIsUnchanged
+    ? bulkProjectActionMode === "copy"
+      ? "Choose a different folder or project to copy these assets."
+      : "Choose a different folder or project to move this selection."
+    : "";
+  const bulkProjectActionDisabled = !selectedDestinationProjectId
+    || selectedDestinationIsBlocked
+    || selectedDestinationIsUnchanged
+    || runningBulkProjectAction
+    || loadingWorkspaceProjects
+    || loadingDestinationFolders
+    || creatingDestinationFolder;
 
   const selectedFolderAssets = useMemo(() => {
     const seen = new Set<string>();
@@ -2978,9 +3274,7 @@ export default function CampaignDetails({
   useEffect(() => {
     if (bulkProjectActionOpen) {
       void loadWorkspaceProjects();
-      if (bulkProjectActionMode === "move") {
-        void loadDestinationFolders();
-      }
+      void loadDestinationFolders();
     }
   }, [bulkProjectActionMode, bulkProjectActionOpen]);
 
@@ -3001,11 +3295,63 @@ export default function CampaignDetails({
   }, [bulkProjectActionOpen, ensureDestinationPathExpanded, selectedDestinationFolderId, selectedDestinationProjectId]);
 
   useEffect(() => {
-    if (bulkProjectActionMode !== "copy") return;
-    if (selectedDestinationFolderId !== null) setSelectedDestinationFolderId(null);
-    if (destinationFolderDraftTarget) setDestinationFolderDraftTarget(null);
-    if (destinationFolderDraftName) setDestinationFolderDraftName("");
-  }, [bulkProjectActionMode, destinationFolderDraftName, destinationFolderDraftTarget, selectedDestinationFolderId]);
+    if (!bulkProjectActionOpen) return;
+    const focusTimer = window.setTimeout(() => destinationSearchInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(focusTimer);
+  }, [bulkProjectActionOpen]);
+
+  useEffect(() => {
+    if (!bulkProjectActionOpen) {
+      destinationPendingScrollRef.current = null;
+      return;
+    }
+
+    const pendingTarget = destinationPendingScrollRef.current;
+    if (!pendingTarget) return;
+    destinationPendingScrollRef.current = null;
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      const root = destinationScrollAreaRef.current;
+      const viewport = root?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]');
+      if (!root || !viewport) return;
+
+      const childrenTarget = Array.from(
+        root.querySelectorAll<HTMLElement>("[data-destination-project-children], [data-destination-folder-children]"),
+      ).find((element) => (
+        pendingTarget.type === "project"
+          ? element.dataset.destinationProjectChildren === pendingTarget.id
+          : element.dataset.destinationFolderChildren === pendingTarget.id
+      ));
+      const rowTarget = Array.from(
+        root.querySelectorAll<HTMLElement>("[data-destination-project-row], [data-destination-folder-row]"),
+      ).find((element) => (
+        pendingTarget.type === "project"
+          ? element.dataset.destinationProjectRow === pendingTarget.id
+          : element.dataset.destinationFolderRow === pendingTarget.id
+      ));
+      const target = childrenTarget ?? rowTarget;
+      if (!target) return;
+
+      const viewportRect = viewport.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const edgePadding = 16;
+      const revealHeight = Math.max(96, Math.min(240, viewportRect.height * 0.6));
+      const targetBottomToReveal = Math.min(targetRect.bottom, targetRect.top + revealHeight);
+      const bottomOverflow = targetBottomToReveal - (viewportRect.bottom - edgePadding);
+
+      if (bottomOverflow > 0) {
+        viewport.scrollBy({ top: bottomOverflow, behavior: "smooth" });
+        return;
+      }
+
+      const topOverflow = targetRect.top - (viewportRect.top + edgePadding);
+      if (topOverflow < 0) {
+        viewport.scrollBy({ top: topOverflow, behavior: "smooth" });
+      }
+    });
+
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [bulkProjectActionOpen, expandedDestinationFolderIds, expandedDestinationProjectIds]);
 
   useEffect(() => {
     if (!selectedDestinationFolderId) return;
@@ -3017,6 +3363,7 @@ export default function CampaignDetails({
 
   useEffect(() => {
     if (!bulkProjectActionOpen) {
+      destinationPendingScrollRef.current = null;
       setDestinationSearch("");
       setSelectedDestinationFolderId(null);
       setDestinationFolderDraftTarget(null);
@@ -3203,13 +3550,12 @@ export default function CampaignDetails({
     parentFolderId: string | null,
     depth: number,
   ) => {
-    if (bulkProjectActionMode !== "move") return null;
     const isActive = destinationFolderDraftTarget?.projectId === projectId
       && destinationFolderDraftTarget?.parentFolderId === parentFolderId;
     if (!isActive) return null;
 
     return (
-      <div className="pt-2" style={{ paddingLeft: `${depth * 18}px` }}>
+      <div className="pt-2" style={{ paddingLeft: `${depth * 24}px` }}>
         <div className="flex items-center gap-2 rounded-2xl border border-primary/20 bg-primary/[0.06] p-2.5 shadow-sm">
           <FolderPlus className="h-4 w-4 shrink-0 text-primary" />
           <Input
@@ -3265,7 +3611,7 @@ export default function CampaignDetails({
     parentFolderId: string | null,
     depth: number,
   ): React.ReactNode => {
-    if (bulkProjectActionMode !== "move") return null;
+    if (!canUseDestinationProjectFolders(projectId)) return null;
     const childrenByParent = destinationChildFoldersByProject.get(projectId) ?? new Map<string | null, FolderRow[]>();
     const visibleFolderIds = destinationVisibilityByProject.get(projectId)?.visibleFolderIds ?? new Set<string>();
     const folderRows = (childrenByParent.get(parentFolderId) ?? []).filter((folder) => (
@@ -3283,11 +3629,23 @@ export default function CampaignDetails({
 
       return (
         <div key={folder.id} className="space-y-1">
-          <div style={{ paddingLeft: `${depth * 18}px` }}>
+          <div className="relative" style={{ paddingLeft: `${depth * 24}px` }}>
+            {depth > 0 ? (
+              <span
+                aria-hidden
+                className="absolute bottom-1 top-1 w-px bg-border/55"
+                style={{ left: `${depth * 24 - 10}px` }}
+              />
+            ) : null}
             <div
-              role="button"
+              data-destination-folder-row={folder.id}
+              role={bulkProjectActionMode === "copy" ? "radio" : "button"}
+              aria-checked={bulkProjectActionMode === "copy" ? isSelected : undefined}
               tabIndex={0}
               onClick={() => selectDestinationLocation(projectId, folder.id)}
+              onDoubleClick={() => {
+                if (hasChildren) toggleDestinationFolderExpanded(folder.id);
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
@@ -3295,13 +3653,15 @@ export default function CampaignDetails({
                 }
               }}
               className={cn(
-                "group flex w-full items-center gap-2 rounded-xl border px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/35",
+                "group flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-xl border px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/35",
                 isSelected
                   ? "border-primary/30 bg-primary/[0.08] text-foreground shadow-sm"
                   : "border-transparent hover:border-border/70 hover:bg-muted/45",
               )}
             >
-              <span
+              <button
+                type="button"
+                aria-label={hasChildren ? (isExpanded ? `Collapse ${folder.name}` : `Expand ${folder.name}`) : `${folder.name} has no folders`}
                 className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/80"
                 onClick={(event) => {
                   event.preventDefault();
@@ -3314,13 +3674,20 @@ export default function CampaignDetails({
                 ) : (
                   <span className="h-4 w-4" />
                 )}
-              </span>
+              </button>
               {isExpanded || isSelected ? (
                 <FolderOpen className="h-4 w-4 shrink-0 text-primary" />
               ) : (
                 <FolderClosed className="h-4 w-4 shrink-0 text-muted-foreground" />
               )}
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">{folder.name}</span>
+              <span className="min-w-0 flex-1 overflow-hidden">
+                <span className="block truncate text-sm font-medium">{folder.name}</span>
+                {destinationSearchQuery ? (
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {[destinationProjects.find((entry) => String(entry.id) === projectId)?.name ?? "Project", ...folderPathParts(folder.id, destinationFoldersById)].join(" / ")}
+                  </span>
+                ) : null}
+              </span>
               <button
                 type="button"
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background/90 hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100"
@@ -3333,7 +3700,17 @@ export default function CampaignDetails({
               >
                 <Plus className="h-4 w-4" />
               </button>
-              {isSelected ? (
+              {bulkProjectActionMode === "copy" ? (
+                <span
+                  aria-hidden
+                  className={cn(
+                    "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors",
+                    isSelected ? "border-primary" : "border-muted-foreground/40",
+                  )}
+                >
+                  {isSelected ? <span className="h-2.5 w-2.5 rounded-full bg-primary" /> : null}
+                </span>
+              ) : isSelected ? (
                 <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
                   <Check className="h-3.5 w-3.5" />
                 </span>
@@ -3342,7 +3719,7 @@ export default function CampaignDetails({
           </div>
           {renderDestinationFolderComposer(projectId, folder.id, depth + 1)}
           {hasChildren && (isExpanded || isComposerParent) ? (
-            <div className="space-y-1">
+            <div className="space-y-1" data-destination-folder-children={folder.id}>
               {renderDestinationFolderNodes(projectId, folder.id, depth + 1)}
             </div>
           ) : null}
@@ -4455,8 +4832,10 @@ export default function CampaignDetails({
             }
           }}
         >
-          <DialogContent className="overflow-hidden p-0 sm:max-w-2xl">
-            <div className="border-b border-border/60 bg-muted/20 px-6 py-5">
+          <DialogContent className={cn(
+            "flex h-[calc(100vh-2rem)] max-h-[calc(100vh-2rem)] flex-col overflow-hidden p-0 sm:max-h-[760px] sm:max-w-2xl",
+          )}>
+            <div className="shrink-0 border-b border-border/60 bg-muted/20 px-6 py-5">
               <DialogHeader className="space-y-2 text-left">
                 <DialogTitle className="flex items-center gap-2">
                   {bulkProjectActionMode === "move" ? (
@@ -4469,151 +4848,224 @@ export default function CampaignDetails({
                 <DialogDescription className="max-w-xl text-sm leading-6">
                   {bulkProjectActionMode === "move"
                     ? `Move ${selectionLabel} to a folder in ${project.name} or into another project.`
-                    : `Copy ${selectionLabel} into another project. Copied assets will appear at the destination project root.`}
+                    : `Copy ${selectionLabel} to another project or one of its folders.`}
                 </DialogDescription>
               </DialogHeader>
               <div className="mt-4 flex flex-wrap gap-2">
-                <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
-                  {selectionSummaryLabel}
-                </Badge>
                 <Badge variant="outline" className="rounded-full px-3 py-1 text-xs">
-                  Current: {project.name}
+                  Current location: {currentSelectionLocationLabel}
                 </Badge>
               </div>
             </div>
 
-            <div className="space-y-4 px-6 py-5">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={destinationSearch}
-                  onChange={(event) => setDestinationSearch(event.target.value)}
-                  placeholder={bulkProjectActionMode === "move" ? "Search projects and folders" : "Search destination projects"}
-                  className="h-11 rounded-xl border-border/70 pl-10"
-                />
+            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-6 py-5">
+              <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+                <div className="relative min-w-0 flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    ref={destinationSearchInputRef}
+                    value={destinationSearch}
+                    onChange={(event) => setDestinationSearch(event.target.value)}
+                    placeholder="Search projects and folders"
+                    className="h-11 rounded-xl border-border/70 pl-10"
+                  />
+                </div>
+                {selectedDestinationProjectId && canUseDestinationProjectFolders(selectedDestinationProjectId) ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11 shrink-0 rounded-xl"
+                    disabled={!canCreateDestinationFolder || creatingDestinationFolder || loadingDestinationFolders}
+                    onClick={() => {
+                      if (!selectedDestinationProjectId) return;
+                      startDestinationFolderCreate(selectedDestinationProjectId, selectedDestinationFolderId);
+                    }}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    New folder
+                  </Button>
+                ) : null}
               </div>
 
-              <div className="rounded-3xl border border-border/70 bg-background shadow-sm">
-                <div className="border-b border-border/60 px-5 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              <div className="flex min-h-0 flex-1 flex-col rounded-3xl border border-border/70 bg-background shadow-sm">
+                <div className="shrink-0 border-b border-border/60 px-5 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                   Destination
                 </div>
-                <ScrollArea className="max-h-[360px]">
-                  <div className="space-y-2 px-3 py-3">
-                    {(loadingWorkspaceProjects || (bulkProjectActionMode === "move" && loadingDestinationFolders)) ? (
-                      <div className="flex items-center gap-2 px-3 py-8 text-sm text-muted-foreground">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Loading destinations...
-                      </div>
-                    ) : visibleDestinationProjects.length === 0 ? (
-                      <div className="px-3 py-8 text-sm text-muted-foreground">
-                        {destinationSearchQuery
-                          ? (bulkProjectActionMode === "move" ? "No projects or folders match your search." : "No projects match your search.")
-                          : (bulkProjectActionMode === "move" ? "No destinations are available in this workspace." : "No other projects are available in this workspace.")}
-                      </div>
-                    ) : (
-                      visibleDestinationProjects.map((workspaceProject) => {
-                        const projectId = String(workspaceProject.id);
-                        const isCurrentProjectDestination = String(projectId) === String(project.id);
-                        const canUseFolders = canMoveSelectionIntoProjectFolders(projectId);
-                        const childrenByParent = destinationChildFoldersByProject.get(projectId) ?? new Map<string | null, FolderRow[]>();
-                        const hasChildren = canUseFolders && (childrenByParent.get(null) ?? []).length > 0;
-                        const isExpanded = destinationSearchQuery.length > 0 || expandedDestinationProjectIds.includes(projectId);
-                        const isSelected = String(selectedDestinationProjectId) === projectId && !selectedDestinationFolderId;
-                        const isComposerParent = canUseFolders && destinationFolderDraftTarget?.projectId === projectId
-                          && destinationFolderDraftTarget?.parentFolderId === null;
+                <div ref={destinationScrollAreaRef} className="min-h-0 flex-1 overflow-hidden">
+                  <ScrollArea className="h-full overflow-hidden">
+                    <div
+                      className="space-y-2 px-3 py-3"
+                      role={bulkProjectActionMode === "copy" ? "radiogroup" : undefined}
+                      aria-label={bulkProjectActionMode === "copy" ? "Destination project" : undefined}
+                    >
+                      {(loadingWorkspaceProjects || loadingDestinationFolders) ? (
+                        <div className="flex items-center gap-2 px-3 py-8 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Loading destinations...
+                        </div>
+                      ) : visibleDestinationProjects.length === 0 ? (
+                        <div className="px-3 py-8 text-sm text-muted-foreground">
+                          {destinationSearchQuery
+                            ? "No projects or folders match your search."
+                            : (bulkProjectActionMode === "move" ? "No destinations are available in this workspace." : "No other destinations are available in this workspace.")}
+                        </div>
+                      ) : (
+                        visibleDestinationProjects.map((workspaceProject) => {
+                          const projectId = String(workspaceProject.id);
+                          const isCurrentProjectDestination = String(projectId) === String(project.id);
+                          const canUseFolders = canUseDestinationProjectFolders(projectId);
+                          const childrenByParent = destinationChildFoldersByProject.get(projectId) ?? new Map<string | null, FolderRow[]>();
+                          const hasChildren = canUseFolders && (childrenByParent.get(null) ?? []).length > 0;
+                          const isExpanded = destinationSearchQuery.length > 0 || expandedDestinationProjectIds.includes(projectId);
+                          const isSelected = String(selectedDestinationProjectId) === projectId && !selectedDestinationFolderId;
+                          const isComposerParent = canUseFolders && destinationFolderDraftTarget?.projectId === projectId
+                            && destinationFolderDraftTarget?.parentFolderId === null;
 
-                        return (
-                          <div key={workspaceProject.id} className="space-y-1">
-                            <div
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => selectDestinationLocation(projectId, null)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter" || event.key === " ") {
-                                  event.preventDefault();
-                                  selectDestinationLocation(projectId, null);
-                                }
-                              }}
-                              className={cn(
-                                "group flex items-center gap-2 rounded-2xl border px-3 py-3 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/35",
-                                isSelected
-                                  ? "border-primary/30 bg-primary/[0.08] text-foreground shadow-sm"
-                                  : "border-transparent hover:border-border/70 hover:bg-muted/45",
-                              )}
-                            >
-                              <button
-                                type="button"
-                                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/80"
-                                onClick={(event) => {
-                                  event.preventDefault();
-                                  event.stopPropagation();
+                          return (
+                            <div key={workspaceProject.id} className="space-y-1">
+                              <div
+                                data-destination-project-row={projectId}
+                                role={bulkProjectActionMode === "copy" ? "radio" : "button"}
+                                aria-checked={bulkProjectActionMode === "copy" ? isSelected : undefined}
+                                tabIndex={0}
+                                onClick={() => selectDestinationLocation(projectId, null)}
+                                onDoubleClick={() => {
                                   if (canUseFolders && hasChildren) toggleDestinationProjectExpanded(projectId);
                                 }}
-                                tabIndex={-1}
-                              >
-                                {hasChildren ? (
-                                  <ChevronRight className={cn("h-4 w-4 transition-transform", isExpanded && "rotate-90")} />
-                                ) : (
-                                  <span className="h-4 w-4" />
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    event.preventDefault();
+                                    selectDestinationLocation(projectId, null);
+                                  }
+                                }}
+                                className={cn(
+                                  "group flex min-w-0 items-center gap-2 overflow-hidden rounded-2xl border px-3 py-3 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/35",
+                                  isSelected
+                                    ? "border-primary/30 bg-primary/[0.08] text-foreground shadow-sm"
+                                    : "border-border/45 bg-muted/20 hover:border-border/80 hover:bg-muted/45",
                                 )}
-                              </button>
-                              <FolderOpen className="h-4 w-4 shrink-0 text-primary" />
-                              <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-medium">{workspaceProject.name}</div>
-                                <div className="text-xs text-muted-foreground">
-                                  {isCurrentProjectDestination
-                                    ? "Current project root"
-                                    : bulkProjectActionMode === "move" && !canUseFolders
-                                    ? "Project root only for this selection"
-                                    : "Project root"}
-                                </div>
-                              </div>
-                              {bulkProjectActionMode === "move" && canUseFolders ? (
+                              >
                                 <button
                                   type="button"
-                                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background/90 hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100"
+                                  aria-label={hasChildren ? (isExpanded ? `Collapse ${workspaceProject.name}` : `Expand ${workspaceProject.name}`) : `${workspaceProject.name} has no folders`}
+                                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/80"
                                   onClick={(event) => {
                                     event.preventDefault();
                                     event.stopPropagation();
-                                    startDestinationFolderCreate(projectId, null);
+                                    if (canUseFolders && hasChildren) toggleDestinationProjectExpanded(projectId);
                                   }}
-                                  aria-label={`Create folder inside ${workspaceProject.name}`}
+                                  tabIndex={-1}
                                 >
-                                  <Plus className="h-4 w-4" />
+                                  {hasChildren ? (
+                                    <ChevronRight className={cn("h-4 w-4 transition-transform", isExpanded && "rotate-90")} />
+                                  ) : (
+                                    <span className="h-4 w-4" />
+                                  )}
                                 </button>
-                              ) : null}
-                              {isSelected ? (
-                                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                                  <Check className="h-3.5 w-3.5" />
-                                </span>
+                                <FolderOpen className="h-4 w-4 shrink-0 text-primary" />
+                                <div className="min-w-0 flex-1 overflow-hidden">
+                                  <div className="truncate text-sm font-medium">{workspaceProject.name}</div>
+                                  <div className="text-xs text-muted-foreground">
+                                    {isCurrentProjectDestination
+                                      ? bulkProjectActionMode === "copy"
+                                        ? "Current project root or folders"
+                                        : "Current project root"
+                                      : bulkProjectActionMode === "move" && !canUseFolders
+                                      ? "Project root only for this selection"
+                                      : bulkProjectActionMode === "copy"
+                                      ? "Choose project root or folder"
+                                      : "Project root"}
+                                  </div>
+                                </div>
+                                {canUseFolders ? (
+                                  <button
+                                    type="button"
+                                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background/90 hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100"
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      startDestinationFolderCreate(projectId, null);
+                                    }}
+                                    aria-label={`Create folder inside ${workspaceProject.name}`}
+                                  >
+                                    <Plus className="h-4 w-4" />
+                                  </button>
+                                ) : null}
+                                {bulkProjectActionMode === "copy" ? (
+                                  <span
+                                    aria-hidden
+                                    className={cn(
+                                      "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors",
+                                      isSelected ? "border-primary" : "border-muted-foreground/40",
+                                    )}
+                                  >
+                                    {isSelected ? <span className="h-2.5 w-2.5 rounded-full bg-primary" /> : null}
+                                  </span>
+                                ) : isSelected ? (
+                                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                                    <Check className="h-3.5 w-3.5" />
+                                  </span>
+                                ) : null}
+                              </div>
+                              {canUseFolders ? renderDestinationFolderComposer(projectId, null, 1) : null}
+                              {canUseFolders && hasChildren && (isExpanded || isComposerParent) ? (
+                                <div className="space-y-1" data-destination-project-children={projectId}>
+                                  {renderDestinationFolderNodes(projectId, null, 1)}
+                                </div>
                               ) : null}
                             </div>
-                            {bulkProjectActionMode === "move" && canUseFolders ? renderDestinationFolderComposer(projectId, null, 1) : null}
-                            {bulkProjectActionMode === "move" && canUseFolders && hasChildren && (isExpanded || isComposerParent) ? (
-                              <div className="space-y-1">
-                                {renderDestinationFolderNodes(projectId, null, 1)}
-                              </div>
-                            ) : null}
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </ScrollArea>
+                          );
+                        })
+                      )}
+                    </div>
+                  </ScrollArea>
+                </div>
               </div>
             </div>
 
-            <DialogFooter className="border-t border-border/60 px-6 py-4 sm:justify-between">
-              <div className="text-xs text-muted-foreground">
-                {selectedDestinationIsBlocked
-                  ? "Choose a destination outside the selected folders."
-                  : selectedDestinationProjectId
-                  ? `Destination: ${selectedDestinationPathLabel}`
-                  : "Choose a destination project to continue."}
+            <div className="flex shrink-0 flex-col gap-3 border-t border-border/60 px-6 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <div className="min-w-0 flex-1 overflow-hidden space-y-1 text-left">
+                {bulkProjectActionMode === "copy" ? (
+                  <div className="grid gap-2 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                        From
+                      </div>
+                      <div className="truncate font-medium text-foreground">
+                        {currentSelectionLocationLabel}
+                      </div>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                        To
+                      </div>
+                      <div className="truncate font-medium text-foreground" aria-live="polite">
+                        {selectedDestinationProjectId ? destinationSummaryPathLabel : "Choose a destination"}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                      Destination
+                    </div>
+                    <div className="truncate text-sm font-medium text-foreground" aria-live="polite">
+                      {selectedDestinationProjectId
+                        ? `Moving ${selectionLabel} to: ${destinationSummaryPathLabel}`
+                        : "Choose a destination to continue."}
+                    </div>
+                  </>
+                )}
+                {destinationActionDisabledReason ? (
+                  <div className="text-xs text-muted-foreground">
+                    {destinationActionDisabledReason}
+                  </div>
+                ) : null}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex w-full min-w-0 shrink-0 items-center justify-end gap-2 sm:w-auto">
                 <Button
                   variant="outline"
+                  className="shrink-0"
                   onClick={() => setBulkProjectActionOpen(false)}
                   disabled={runningBulkProjectAction || creatingDestinationFolder}
                 >
@@ -4621,7 +5073,8 @@ export default function CampaignDetails({
                 </Button>
                 <Button
                   onClick={() => void handleBulkProjectAction()}
-                  disabled={!selectedDestinationProjectId || selectedDestinationIsBlocked || runningBulkProjectAction || loadingWorkspaceProjects || (bulkProjectActionMode === "move" && loadingDestinationFolders) || creatingDestinationFolder}
+                  disabled={bulkProjectActionDisabled}
+                  className="min-w-0 max-w-full flex-1 sm:max-w-[260px] sm:flex-none"
                 >
                   {runningBulkProjectAction ? (
                     <>
@@ -4635,12 +5088,12 @@ export default function CampaignDetails({
                       ) : (
                         <CopyPlus className="mr-2 h-4 w-4" />
                       )}
-                      {bulkProjectActionMode === "move" ? "Move selected items" : "Copy selected assets"}
+                      <span className="truncate">{primaryBulkProjectActionLabel}</span>
                     </>
                   )}
                 </Button>
               </div>
-            </DialogFooter>
+            </div>
           </DialogContent>
         </Dialog>
 
