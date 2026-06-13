@@ -256,4 +256,4 @@ This repository is the open-source, self-hosted version of Reloops.
 
 ## 📄 License
 
-This repository's source code is available under the [AGPL-3.0 license](LICENSE).
+This repository's source code is available under the [AGPL-3.0 license](LICENSE)
