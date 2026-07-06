@@ -246,12 +246,12 @@ This repository is the open-source, self-hosted version of Reloops.
   - Hosted billing and managed subscription infrastructure
   - Hosted cloud storage integrations beyond local Supabase Storage defaults
   - Hosted workers, QStash, Cloudflare Workers, and commercial deployment infrastructure
-  - Managed analytics and managed screenshot capture
+  - Managed analytics and hosted screenshot-capture credits
   - Managed email delivery; local OSS includes notification data/preferences and local invite handling, but production email delivery is expected to be wired by the self-hosting team
 
 * 🗄️ Storage and capture model:
   - Uploads use Supabase Storage.
-  - Website review works with uploaded or captured screenshots.
+  - Website review works with uploaded screenshots, or captured screenshots when `SCREENSHOTONE_ACCESS_KEY` is configured.
   - Asset intelligence runs locally through the worker to generate smart descriptions and tags unless you connect your own production worker setup.
 
 ## 📄 License
