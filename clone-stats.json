@@ -2,15 +2,15 @@
   "schemaVersion": 1,
   "repository": "Reloops-App/Reloops",
   "trackingStartedAt": "2026-05-24",
-  "lastRecordedDay": "2026-08-15",
-  "totalClones": 1055,
-  "latestWindowClones": 149,
-  "latestWindowUniqueCloners": 90,
+  "lastRecordedDay": "2026-08-17",
+  "totalClones": 1084,
+  "latestWindowClones": 166,
+  "latestWindowUniqueCloners": 96,
   "latestWindow": {
-    "firstDay": "2026-08-02",
-    "lastDay": "2026-08-15",
-    "clones": 149,
-    "uniqueCloners": 90
+    "firstDay": "2026-08-04",
+    "lastDay": "2026-08-17",
+    "clones": 166,
+    "uniqueCloners": 96
   },
   "daily": {
     "2026-05-24": {
@@ -348,6 +348,14 @@
     "2026-08-15": {
       "clones": 9,
       "uniqueCloners": 8
+    },
+    "2026-08-16": {
+      "clones": 10,
+      "uniqueCloners": 5
+    },
+    "2026-08-17": {
+      "clones": 19,
+      "uniqueCloners": 9
     }
   }
 }
