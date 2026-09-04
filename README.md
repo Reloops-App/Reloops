@@ -230,6 +230,10 @@ docker compose up --build
 
 Then open `http://127.0.0.1:6173`. For manual pnpm setup and environment details, see the [Local Setup Guide](docs/SETUP.md).
 
+## 🤝 Contributing
+
+We welcome contributions! Check out the GitHub issues to find ways to help improve Reloops.
+
 ## 🏠 Self-hosted OSS
 
 This repository is the open-source, self-hosted version of Reloops.
