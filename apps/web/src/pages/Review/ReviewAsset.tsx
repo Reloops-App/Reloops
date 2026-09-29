@@ -68,6 +68,7 @@ import {
 import { getDesignAssetLabel, isDesignPreviewUnavailableAsset } from "@/lib/designFiles";
 import { previewBackgroundClass } from "@/lib/imagePreviewBackground";
 import { useImagePreviewBackground } from "@/hooks/useImagePreviewBackground";
+import { useResolvedAssetFileUrl } from "@/lib/assetFileUrl";
 
 // Types
 type Asset = {
@@ -922,7 +923,7 @@ export default function ReviewAsset() {
 
   const isVideo = Boolean(asset?.mime_type && asset.mime_type.startsWith("video/"));
   const isPdf = asset?.mime_type === "application/pdf";
-  const reviewImageUrl = (() => {
+  const reviewImageUrl = useResolvedAssetFileUrl((() => {
     const rawPath = asset?.storage_path || asset?.url || "";
     if (!rawPath) return "";
     if (rawPath.startsWith("http")) return rawPath;
@@ -930,7 +931,7 @@ export default function ReviewAsset() {
     const base = proxy.endsWith("/") ? proxy.slice(0, -1) : proxy;
     const path = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
     return `${base}${path}`;
-  })();
+  })()) ?? "";
   const assetDisplayName = asset?.title || asset?.name || "Asset";
   const isUnsupportedDesignPreview = isDesignPreviewUnavailableAsset({
     mime_type: asset?.mime_type,

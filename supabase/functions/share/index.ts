@@ -1,6 +1,16 @@
 import { corsHeaders, json } from "../_shared/cors.ts";
-import { admin, getUser, isWorkspaceMember } from "../_shared/admin.ts";
+import { admin, getUser, isWorkspaceMember, supabaseUrl } from "../_shared/admin.ts";
 import { resolveSharedCollectionRows } from "../../shared/collectionShare.ts";
+import { listProjectAssetIds } from "../../shared/dam.ts";
+import { resolvePublicSupabaseUrl, toPublicStorageUrl } from "../../shared/publicStorageUrl.ts";
+
+// The Supabase CLI drops SUPABASE_* names from --env-file, so the public URL uses its own name.
+const PUBLIC_SUPABASE_URL = Deno.env.get("PUBLIC_SUPABASE_URL") ?? "";
+
+function publicStorageUrl(req: Request | undefined, url: string | null | undefined) {
+  const publicBase = resolvePublicSupabaseUrl({ explicit: PUBLIC_SUPABASE_URL, internalUrl: supabaseUrl, headers: req?.headers });
+  return toPublicStorageUrl(url, supabaseUrl, publicBase);
+}
 
 type ShareLink = {
   id: string;
@@ -55,7 +65,7 @@ async function getCollection(collectionId: string) {
   return data;
 }
 
-async function assetPayload(assetId: string) {
+async function assetPayload(assetId: string, req: Request) {
   const asset = await getAsset(assetId);
   if (!asset) return null;
 
@@ -78,15 +88,15 @@ async function assetPayload(assetId: string) {
     .createSignedUrl(asset.storage_path, 60 * 60);
 
   const thumbnailUrl = asset.thumbnail_path
-    ? admin.storage.from("thumbnails").getPublicUrl(asset.thumbnail_path).data.publicUrl
+    ? publicStorageUrl(req, admin.storage.from("thumbnails").getPublicUrl(asset.thumbnail_path).data.publicUrl)
     : null;
 
   return {
-    assets: { ...asset, file_url: signed?.signedUrl ?? null, signed_url: signed?.signedUrl ?? null },
+    assets: { ...asset, file_url: publicStorageUrl(req, signed?.signedUrl), signed_url: publicStorageUrl(req, signed?.signedUrl) },
     versions: versions ?? [asset],
     comments: comments ?? [],
-    file_url: signed?.signedUrl ?? null,
-    fileUrl: signed?.signedUrl ?? null,
+    file_url: publicStorageUrl(req, signed?.signedUrl),
+    fileUrl: publicStorageUrl(req, signed?.signedUrl),
     thumbnail_url: thumbnailUrl,
     thumbnailUrl,
   };
@@ -101,7 +111,39 @@ async function isAssetAllowedByShare(share: ShareLink, assetId: string) {
   return rows.some((row) => row.asset.id === assetId);
 }
 
+async function listProjectAssetShares(req: Request, projectId: string) {
+  const { data: project } = await admin.from("projects").select("id, workspace_id").eq("id", projectId).maybeSingle();
+  if (!project) return json({ error: "Project not found" }, { status: 404 });
+  const member = await requireMember(req, project.workspace_id);
+  if (member.response) return member.response;
+
+  const assetIds = await listProjectAssetIds(projectId);
+  if (!assetIds.length) return json({ data: [] });
+  const { data: links, error } = await admin
+    .from("share_links")
+    .select("*")
+    .eq("subject_type", "asset")
+    .in("subject_id", assetIds)
+    .order("created_at", { ascending: false });
+  if (error) return json({ error: error.message }, { status: 500 });
+
+  const { data: assets } = await admin
+    .from("assets")
+    .select("id, title, mime_type, storage_path, cover_image_url, folder_id")
+    .in("id", Array.from(new Set((links ?? []).map((row: any) => row.subject_id))));
+  const assetById = new Map((assets ?? []).map((row: any) => [row.id, row]));
+  return json({
+    data: (links ?? [])
+      .filter((row: any) => assetById.has(row.subject_id))
+      .map(({ token: _token, password_hash: _passwordHash, ...row }: any) => ({ ...row, asset_id: row.asset_id ?? row.subject_id, assets: assetById.get(row.subject_id), share_url: shareUrl(`/share/${row.id}`) })),
+  });
+}
+
 async function listAssetShares(req: Request, body: any) {
+  // The project Links tab lists every asset share link in the project (cloud parity).
+  const projectId = String(body.projectId ?? body.project_id ?? "").trim();
+  if (projectId && !body.asset_id && !body.assetId) return await listProjectAssetShares(req, projectId);
+
   const assetId = String(body.asset_id ?? body.assetId ?? "").trim();
   if (!assetId) return json({ error: "asset_id required" }, { status: 400 });
 
@@ -201,7 +243,7 @@ async function getAssetShare(req: Request, body: any) {
 
   const share = await getValidShare(token);
   if (!share || share.subject_type !== "asset") return json({ error: "Share link not found" }, { status: 404 });
-  const payload = await assetPayload(share.subject_id);
+  const payload = await assetPayload(share.subject_id, req);
   if (!payload) return json({ error: "Asset not found" }, { status: 404 });
 
   const user = await getUser(req);
@@ -230,8 +272,8 @@ async function getCollectionShare(req: Request, body: any) {
       ...row,
       asset: {
         ...row.asset,
-        file_url: data?.signedUrl ?? null,
-        signed_url: data?.signedUrl ?? null,
+        file_url: publicStorageUrl(req, data?.signedUrl),
+        signed_url: publicStorageUrl(req, data?.signedUrl),
       },
     };
   }));
@@ -280,7 +322,7 @@ Deno.serve(async (req) => {
       return json({ share, collection, rows, folders });
     }
 
-    const payload = await assetPayload(share.subject_id);
+    const payload = await assetPayload(share.subject_id, req);
     if (!payload) return json({ error: "Asset not found" }, { status: 404 });
     return json({ share, ...payload });
   }

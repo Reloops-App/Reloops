@@ -153,7 +153,7 @@ export function YouTubeShortsOverlay({ visible, safeArea = { top: 0, bottom: 0, 
                 </div>
                 <div className="flex flex-col items-center gap-1 opacity-100 min-w-[50px]">
                     <Youtube className="h-[24px] w-[24px] text-white" strokeWidth={2.5} />
-                    <span className="text-[10px] font-medium text-white/90">Following</span>
+                    <span className="text-[10px] font-medium text-white/90">Subscriptions</span>
                 </div>
                 <div className="flex flex-col items-center gap-1 opacity-100 min-w-[50px]">
                     <Avatar className="h-6 w-6 ring-1 ring-white/20 shadow-sm">

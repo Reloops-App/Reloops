@@ -65,3 +65,15 @@ verify_jwt = false
 
 [functions.api-shares]
 verify_jwt = false
+
+[functions.project-share]
+verify_jwt = false
+
+[functions.project-share-comment]
+verify_jwt = false
+
+[functions.project-share-upload]
+verify_jwt = false
+
+[functions.api-project-shares]
+verify_jwt = false

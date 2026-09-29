@@ -127,6 +127,7 @@ const rootChanged = upsertEnvFile(
     VITE_ASSET_PUBLIC_BASE_URL: `${publicApiUrl}/storage/v1/object/public/assets/`,
     SUPABASE_URL: serverApiUrl,
     SUPABASE_PUBLIC_URL: publicApiUrl,
+    PUBLIC_SUPABASE_URL: publicApiUrl,
     SUPABASE_ANON_KEY: values.ANON_KEY,
     SUPABASE_SERVICE_ROLE_KEY: values.SERVICE_ROLE_KEY,
     URL_SUPABASE: serverApiUrl,

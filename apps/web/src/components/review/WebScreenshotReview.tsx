@@ -1,21 +1,52 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronLeft, ChevronRight, Download, Eye, EyeOff, Hand, Maximize2, MessageSquare, Minus, PenSquare, Plus, Search, Send, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Eye, EyeOff, Maximize2, Minus, Plus, Move } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn, downloadFile } from "@/lib/utils";
+import { resolveAssetDownloadUrl } from "@/lib/mediaDelivery";
 import { getLoggedInUserProfile } from "@/lib/supabaseClient";
 import { invokeEdgeFunction } from "@/api/edge";
 import { getAvatarInitials } from "@/lib/avatar-utils";
+import type { CommentMutationContext } from "@/lib/shareGuestIdentity";
 
 import CommentsPanel from "./CommentsPanel";
-import { BubblePin, PinIcon } from "./shared/PinMarker";
+import { BubblePin } from "./shared/PinMarker";
 import { CommentPopover } from "./shared/CommentPopover";
+import { InlineNoteComposer } from "./shared/InlineNoteComposer";
 import { ReviewModeBar } from "./shared/ReviewModeBar";
-import type { Annotation, Stroke, Tool } from "./annotator-utils";
-import { drawStrokes, getAnnotationFocusPoint, getDrawingBounds, normalizeAnnotation } from "./annotator-utils";
+import type { Annotation, Stroke } from "./annotator-utils";
+import { drawStrokes, getAnnotationFocusPoint, getDrawingBounds, normalizeAnnotationList, mergeAnnotationOverrides } from "./annotator-utils";
 import { useDrawing } from "./shared/useDrawing";
+import { useDraggablePin } from "./shared/useDraggablePin";
+
+const DRAFT_PIN_ID = "__draft-anchor__";
+const OVERLAY_MARGIN_PX = 12;
+const INLINE_COMPOSER_WIDTH_PX = 280;
+const INLINE_COMPOSER_ESTIMATED_HEIGHT_PX = 190;
+const COMMENT_POPOVER_WIDTH_PX = 280;
+const COMMENT_POPOVER_ESTIMATED_HEIGHT_PX = 260;
+
+// Percentage-anchored overlay clamped on all four sides via pure CSS
+// min()/max()/calc() -- this viewer resizes its page frame by width%
+// instead of a CSS transform, so (unlike image.tsx/pdf.tsx) no zoom-scale
+// compensation is needed on the offsets. Only left/min(right) and
+// max(top) were clamped before; a pin or draft anchor near the left edge
+// or the bottom of the page could still push the composer/popover past
+// the unclamped side and get visually cut off.
+function getClampedOverlayStyle(
+  anchor: { x: number; y: number },
+  xOffsetPx: number,
+  yOffsetPx: number,
+  width: number,
+  estimatedHeight: number
+) {
+  return {
+    left: `min(max(calc(${anchor.x * 100}% + ${xOffsetPx}px), ${OVERLAY_MARGIN_PX}px), calc(100% - ${width + OVERLAY_MARGIN_PX}px))`,
+    top: `min(max(calc(${anchor.y * 100}% + ${yOffsetPx}px), ${OVERLAY_MARGIN_PX}px), calc(100% - ${estimatedHeight + OVERLAY_MARGIN_PX}px))`,
+  };
+}
 
 export type WebScreenshotReviewProps = {
   imageUrl?: string;
@@ -34,8 +65,6 @@ export type WebScreenshotReviewProps = {
     tags?: string[] | null;
     smart_tags?: string[] | null;
     smart_description?: string | null;
-    ai_description?: string | null;
-    ai_metadata?: Record<string, any> | null;
     status?: string | null;
     assigned_to?: string | null;
     uploaded_by?: string | null;
@@ -49,8 +78,23 @@ export type WebScreenshotReviewProps = {
     duration_ms?: number | null;
     version_no?: number | null;
     storage_path: string;
+    signed_url?: string | null;
+    delivery_url?: string | null;
+    cdn_url?: string | null;
   } | null;
   onAssetMetadataSave?: (patch: { description: string | null; tags: string[] }) => Promise<void> | void;
+  onRetagAsset?: () => void;
+  retagStatus?: "idle" | "queued" | "error";
+  commentsPanelOpen?: boolean;
+  onCommentsPanelOpenChange?: (open: boolean) => void;
+  commentMutationContext?: CommentMutationContext;
+  // Which edge function edit/delete calls target — defaults to the shared
+  // "comment" function used by every existing caller. A share flow with its
+  // own isolated comment function can point this elsewhere without changing
+  // behavior for anyone else.
+  commentEndpoint?: string;
+  onMediaError?: () => void;
+  fallbackDownloadUrl?: string | null;
   profiles?: Record<string, {
     id: string;
     display_name?: string | null;
@@ -82,27 +126,13 @@ type SectionJump = {
   jump: number;
 };
 
-const ANNOTATION_COLORS = ["#ffd400", "#ff55cc", "#8dfd00", "#ff7a00", "#ff0000"];
 const DEFAULT_ANNOTATION_COLOR = "#35c8d6";
-const DRAW_TOOL_OPTIONS: Array<{ id: Tool; label: string }> = [
-  { id: "pen", label: "Pen" },
-  { id: "line", label: "Line" },
-  { id: "arrow", label: "Arrow" },
-  { id: "rect", label: "Box" },
-];
-
 function createAnchorStroke(point: { x: number; y: number }, strokeColor: string): Stroke {
   return {
     tool: "pen",
     color: strokeColor,
     points: [point],
   };
-}
-
-function getCommentPreview(text: string) {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (normalized.length <= 80) return normalized;
-  return `${normalized.slice(0, 77)}...`;
 }
 
 function getAnnotationAccentColor(annotation: Annotation) {
@@ -147,6 +177,14 @@ export default function WebScreenshotReview({
   assetId,
   asset,
   onAssetMetadataSave,
+  onRetagAsset,
+  retagStatus,
+  commentsPanelOpen,
+  onCommentsPanelOpenChange,
+  commentMutationContext,
+  commentEndpoint = "comment",
+  onMediaError,
+  fallbackDownloadUrl,
   profiles = {},
 }: WebScreenshotReviewProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -155,8 +193,15 @@ export default function WebScreenshotReview({
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const committedCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const liveCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const inlineComposerRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // Holds only the fields the user has locally changed (delete/complete/
+  // edit), keyed by annotation id, re-applied on every sync below -- see
+  // mergeAnnotationOverrides for why: without it, deleting a comment and
+  // then adding another one (or anything else that refreshes
+  // annotationsProp) before the delete's own server round-trip/realtime
+  // echo lands would silently resurrect it, since the next prop sync still
+  // carries the pre-delete shape.
+  const [annotationOverrides, setAnnotationOverrides] = useState<Record<string, Partial<Annotation>>>({});
   const [annotations, setAnnotations] = useState<Annotation[]>(annotationsProp ?? []);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
@@ -165,8 +210,35 @@ export default function WebScreenshotReview({
   const [zoomLevel, setZoomLevel] = useState(1);
   const [hoverPoint, setHoverPoint] = useState<{ x: number; y: number; clientX: number; clientY: number } | null>(null);
   const [commentsCollapsed, setCommentsCollapsed] = useState(true);
+  const commentsOpen = commentsPanelOpen ?? !commentsCollapsed;
+  const canCompleteComments = !commentMutationContext?.share_token;
+
+  // Edit/delete target the "comment" function by default (unchanged for
+  // every existing caller). A share flow with its own isolated comment
+  // function passes commentEndpoint to route here instead — that function
+  // takes an action-based POST body rather than comment's PATCH-with-status.
+  const editOrDeleteComment = useCallback(async (action: "edit" | "delete", fields: { id: string; body?: string }) => {
+    if (commentEndpoint === "comment") {
+      const patchBody: Record<string, unknown> = { id: fields.id, ...(commentMutationContext ?? {}) };
+      if (action === "edit") patchBody.body = fields.body;
+      else patchBody.status = "deleted";
+      return invokeEdgeFunction("comment", { method: "PATCH", body: patchBody });
+    }
+    return invokeEdgeFunction(commentEndpoint, {
+      method: "POST",
+      body: { action, id: fields.id, body: fields.body, ...(commentMutationContext ?? {}) },
+    });
+  }, [commentEndpoint, commentMutationContext]);
+  const setCommentsOpen = useCallback((open: boolean) => {
+    if (onCommentsPanelOpenChange) {
+      onCommentsPanelOpenChange(open);
+      return;
+    }
+    setCommentsCollapsed(!open);
+  }, [onCommentsPanelOpenChange]);
   const [inlineComposerOpen, setInlineComposerOpen] = useState(false);
   const [inlineComposerText, setInlineComposerText] = useState("");
+  const [dockComposerText, setDockComposerText] = useState("");
   const [pageMetrics, setPageMetrics] = useState({
     naturalWidth: 0,
     naturalHeight: 0,
@@ -205,13 +277,13 @@ export default function WebScreenshotReview({
 
   useEffect(() => {
     if (!annotationsProp) return;
-    try {
-      const arr = Array.isArray(annotationsProp) ? annotationsProp : [annotationsProp];
-      setAnnotations(arr.map((a) => normalizeAnnotation(a)));
-    } catch {
-      setAnnotations(annotationsProp as Annotation[]);
-    }
-  }, [annotationsProp]);
+    setAnnotations(mergeAnnotationOverrides(normalizeAnnotationList(annotationsProp), annotationOverrides));
+  }, [annotationsProp, annotationOverrides]);
+
+  const applyLocalAnnotationUpdate = useCallback((id: string, patch: Partial<Annotation>) => {
+    setAnnotationOverrides((current) => ({ ...current, [id]: { ...current[id], ...patch } }));
+    setAnnotations((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }, []);
 
   const committedStrokes = useMemo<Stroke[]>(
     () => annotations.flatMap((annotation) => annotation.drawing ?? []),
@@ -443,7 +515,6 @@ export default function WebScreenshotReview({
       .filter((entry) => entry.focus);
   }, [pageMetrics.naturalHeight, pageMetrics.naturalWidth, visibleAnnotations]);
   const selectedTarget = annotationTargets.find((entry) => entry.annotation.id === selectedAnnotationId) ?? null;
-  const hoveredTarget = annotationTargets.find((entry) => entry.annotation.id === hoveredAnnotationId) ?? null;
   const selectedTargetIsAnchorOnly = selectedTarget
     ? isAnchorOnlyAnnotation(selectedTarget.annotation, selectedTarget.bounds)
     : false;
@@ -458,8 +529,9 @@ export default function WebScreenshotReview({
   const draftAnchorFocus = draftAnchorBounds
     ? { x: (draftAnchorBounds.minX + draftAnchorBounds.maxX) / 2, y: (draftAnchorBounds.minY + draftAnchorBounds.maxY) / 2 }
     : null;
+  const { resolveFocus, beginDrag, updateDrag, endDrag, draggingId } = useDraggablePin();
+  const resolvedDraftAnchorFocus = draftAnchorFocus ? resolveFocus(DRAFT_PIN_ID, draftAnchorFocus) : null;
 
-  const activeRangeLabel = activeSection ? `${activeSection.start}–${activeSection.end}%` : "0–100%";
   const hoverIndicatorLabel = isCommentMode ? "+ Comment" : isZoomMode ? "Click to zoom" : null;
   const pageScalePercent = Math.round(zoomLevel * 100);
   const overlayCursor = isPanMode
@@ -469,14 +541,6 @@ export default function WebScreenshotReview({
       : isCommentMode
         ? "cursor-copy"
         : "cursor-crosshair";
-  const activeDrawToolLabel = DRAW_TOOL_OPTIONS.find((option) => option.id === tool)?.label ?? "Pen";
-  const modeHelperLabel = isCommentMode
-    ? "Click the page to place a note, then type in the inline note box."
-    : isDrawMode
-      ? `Drag on the page to mark it. Current tool: ${activeDrawToolLabel}.`
-      : null;
-  const modeHelperAccent = isCommentMode || isDrawMode ? color : DEFAULT_ANNOTATION_COLOR;
-
   const activateMode = useCallback((nextMode: InteractionMode) => {
     setInteractionMode(nextMode);
   }, []);
@@ -488,6 +552,16 @@ export default function WebScreenshotReview({
       clearStrokes();
     }
   }, [clearStrokes]);
+
+  const handleShowAnnotationsChange = useCallback((next: boolean) => {
+    setShowAnnotations(next);
+    if (!next) {
+      setSelectedAnnotationId(null);
+      setHoveredAnnotationId(null);
+      closeInlineComposer(true);
+      setInteractionMode("pan");
+    }
+  }, [closeInlineComposer]);
 
   const submitAnnotation = useCallback(async (text: string) => {
     const trimmed = text.trim();
@@ -508,12 +582,13 @@ export default function WebScreenshotReview({
         drawing: [...liveStrokes],
       };
 
-      setAnnotations((prev) => {
-        if (prev.some((annotation) => annotation.id === payload.id)) return prev;
-        return [...prev, payload];
-      });
-
-      setSelectedAnnotationId(payload.id);
+      if (!onAddAnnotation) {
+        setAnnotations((prev) => {
+          if (prev.some((annotation) => annotation.id === payload.id)) return prev;
+          return [...prev, payload];
+        });
+        setSelectedAnnotationId(payload.id);
+      }
       setInteractionMode("pan");
       closeInlineComposer(true);
       showTransientFeedback(payload.drawing?.length ? "Comment added to page" : "Note added");
@@ -521,15 +596,11 @@ export default function WebScreenshotReview({
       if (onAddAnnotation) {
         await onAddAnnotation(payload);
       }
+      setDockComposerText("");
     } catch (error) {
       console.error("Failed to submit screenshot comment:", error);
     }
   }, [closeInlineComposer, liveStrokes, onAddAnnotation, showTransientFeedback]);
-
-  useEffect(() => {
-    if (!inlineComposerOpen) return;
-    inlineComposerRef.current?.focus();
-  }, [inlineComposerOpen]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -558,8 +629,13 @@ export default function WebScreenshotReview({
                   onModeChange={(m) => {
                     closeInlineComposer(true);
                     if (m === "view") activateMode("pan");
-                    else if (m === "comment") activateMode("comment");
-                    else if (m === "draw") activateMode("draw");
+                    else if (m === "comment") {
+                      setShowAnnotations(true);
+                      activateMode("comment");
+                    } else if (m === "draw") {
+                      setShowAnnotations(true);
+                      activateMode("draw");
+                    }
                   }}
                   tool={tool}
                   onToolChange={setTool}
@@ -595,7 +671,7 @@ export default function WebScreenshotReview({
                     <TooltipProvider>
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <Button variant="ghost" size="sm" className="h-8 shrink-0 rounded-lg px-3 text-xs" onClick={() => setShowAnnotations((v) => !v)}>
+                          <Button variant="ghost" size="sm" className="h-8 shrink-0 rounded-lg px-3 text-xs" onClick={() => handleShowAnnotationsChange(!showAnnotations)}>
                             {showAnnotations ? <EyeOff className="mr-2 h-4 w-4" /> : <Eye className="mr-2 h-4 w-4" />}
                             <span className="hidden sm:inline">{showAnnotations ? "Hide annotations" : "Show annotations"}</span>
                           </Button>
@@ -607,19 +683,18 @@ export default function WebScreenshotReview({
                     <Button variant="ghost" size="sm" className="h-8 shrink-0 rounded-lg px-3 text-xs" onClick={() => {
                       const storagePath = asset?.storage_path;
                       if (!storagePath) return;
-                      const proxy = import.meta.env.VITE_ASSET_PUBLIC_BASE_URL || "";
-                      const base = proxy.endsWith("/") ? proxy.slice(0, -1) : proxy;
-                      const path = storagePath.startsWith("/") ? storagePath : `/${storagePath}`;
-                      void downloadFile(`${base}${path}`, asset?.title || "screenshot");
+                      void downloadFile(imageUrl || resolveAssetDownloadUrl(asset), asset?.title || "screenshot", { fallbackUrl: fallbackDownloadUrl });
                     }}>
                       <Download className="mr-2 h-4 w-4" />
                       <span className="hidden sm:inline">Download</span>
                     </Button>
 
-                    <Button variant="ghost" size="sm" className="hidden h-8 shrink-0 rounded-lg px-3 text-xs lg:inline-flex" onClick={() => setCommentsCollapsed((value) => !value)}>
-                      {commentsCollapsed ? <ChevronLeft className="mr-2 h-4 w-4" /> : <ChevronRight className="mr-2 h-4 w-4" />}
-                      <span>{commentsCollapsed ? "Show comments" : "Hide comments"}</span>
-                    </Button>
+                    {commentsPanelOpen == null ? (
+                      <Button variant="ghost" size="sm" className="hidden h-8 shrink-0 rounded-lg px-3 text-xs lg:inline-flex" onClick={() => setCommentsOpen(!commentsOpen)}>
+                        {commentsOpen ? <ChevronRight className="mr-2 h-4 w-4" /> : <ChevronLeft className="mr-2 h-4 w-4" />}
+                        <span>{commentsOpen ? "Hide comments" : "Show comments"}</span>
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
 
@@ -688,6 +763,7 @@ export default function WebScreenshotReview({
                               className="block h-auto w-full select-none"
                               draggable={false}
                               onLoad={handleImageLoad}
+                              onError={onMediaError}
                             />
 
                             {showAnnotations && selectedTarget?.focus && selectedTargetIsAnchorOnly ? (
@@ -717,75 +793,108 @@ export default function WebScreenshotReview({
                               />
                             ) : null}
 
-                            {showAnnotations && annotationTargets.map((entry, idx) => {
+                            {showAnnotations && annotationTargets.map((entry) => {
+                              if (!entry.focus) return null;
+                              const focus = entry.focus;
                               const isSelected = entry.annotation.id === selectedAnnotationId;
                               const isHovered = entry.annotation.id === hoveredAnnotationId;
+                              const isDragging = draggingId === entry.annotation.id;
+                              const resolved = resolveFocus(entry.annotation.id, focus);
                               return (
                                 <button
                                   key={entry.annotation.id}
                                   type="button"
+                                  title="Drag to move this pin"
                                   className={cn(
-                                    "absolute z-20 -translate-x-1/2 -translate-y-1/2 transition hover:-translate-y-[55%]",
+                                    "group absolute z-20 -translate-x-1/2 -translate-y-1/2 touch-none transition",
+                                    isDragging ? "cursor-grabbing" : "cursor-grab hover:-translate-y-[55%]",
                                     (isSelected || isHovered) ? "z-30" : ""
                                   )}
                                   style={{
-                                    left: `${entry.focus!.x * 100}%`,
-                                    top: `${entry.focus!.y * 100}%`,
+                                    left: `${resolved.x * 100}%`,
+                                    top: `${resolved.y * 100}%`,
                                   }}
-                                  onClick={(e) => {
+                                  onPointerDown={(e) => beginDrag(entry.annotation.id, focus, e)}
+                                  onPointerMove={(e) => updateDrag(e, pageMetrics.renderedWidth, pageMetrics.renderedHeight)}
+                                  onPointerUp={(e) => {
                                     e.stopPropagation();
-                                    handleCommentFocus(entry.annotation.id);
+                                    const wasDrag = endDrag(e);
+                                    if (!wasDrag) handleCommentFocus(entry.annotation.id);
                                   }}
                                   onMouseEnter={() => setHoveredAnnotationId(entry.annotation.id)}
                                   onMouseLeave={() => setHoveredAnnotationId((current) => current === entry.annotation.id ? null : current)}
                                 >
-                                  <BubblePin 
+                                  <BubblePin
                                     initials={getAvatarInitials(entry.annotation.author || "?")}
-                                    color={entry.accentColor}
                                     userId={entry.annotation.authorId}
                                     userName={entry.annotation.author}
                                   />
+                                  <span className="pointer-events-none absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-white/40 bg-slate-900/90 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                                    <Move className="h-2.5 w-2.5" />
+                                  </span>
                                 </button>
                               );
                             })}
 
-                            {isCommentMode && draftAnchorFocus ? (
-                              <div
-                                className="pointer-events-none absolute z-20 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[#35c8d6]/70 bg-[#35c8d6] text-[11px] font-semibold text-slate-950 shadow-[0_12px_30px_rgba(53,200,214,0.28)] ring-4 ring-[#35c8d6]/20"
+                            {showAnnotations && isCommentMode && resolvedDraftAnchorFocus ? (
+                              <button
+                                type="button"
+                                title="Drag to move this pin"
+                                className={cn(
+                                  "group absolute z-20 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 touch-none items-center justify-center rounded-full border border-[#35c8d6]/70 bg-[#35c8d6] text-[11px] font-semibold text-slate-950 shadow-[0_12px_30px_rgba(53,200,214,0.28)] ring-4 ring-[#35c8d6]/20 transition",
+                                  draggingId === DRAFT_PIN_ID ? "cursor-grabbing" : "cursor-grab"
+                                )}
                                 style={{
-                                  left: `${draftAnchorFocus.x * 100}%`,
-                                  top: `${draftAnchorFocus.y * 100}%`,
+                                  left: `${resolvedDraftAnchorFocus.x * 100}%`,
+                                  top: `${resolvedDraftAnchorFocus.y * 100}%`,
+                                }}
+                                onPointerDown={(e) => beginDrag(DRAFT_PIN_ID, resolvedDraftAnchorFocus, e)}
+                                onPointerMove={(e) => updateDrag(e, pageMetrics.renderedWidth, pageMetrics.renderedHeight)}
+                                onPointerUp={(e) => {
+                                  e.stopPropagation();
+                                  endDrag(e);
                                 }}
                               >
                                 +
-                              </div>
+                                <span className="pointer-events-none absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-white/40 bg-slate-900/90 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                                  <Move className="h-2.5 w-2.5" />
+                                </span>
+                              </button>
                             ) : null}
 
-                            {showAnnotations && selectedTarget && !inlineComposerOpen ? (
+                            {showAnnotations && selectedTarget?.focus && !inlineComposerOpen ? (
                               <div
                                 className="absolute z-40"
-                                style={{
-                                  left: `min(calc(${selectedTarget.focus!.x * 100}% + 24px), calc(100% - 252px))`,
-                                  top: `max(calc(${selectedTarget.focus!.y * 100}% - 18px), 16px)`,
-                                }}
+                                style={getClampedOverlayStyle(
+                                  resolveFocus(selectedTarget.annotation.id, selectedTarget.focus),
+                                  24,
+                                  -18,
+                                  COMMENT_POPOVER_WIDTH_PX,
+                                  COMMENT_POPOVER_ESTIMATED_HEIGHT_PX
+                                )}
                               >
-                                <CommentPopover 
+                                <CommentPopover
                                   author={selectedTarget.annotation.author || "Unknown"}
                                   authorId={selectedTarget.annotation.authorId}
                                   text={selectedTarget.annotation.text || ""}
                                   createdAt={selectedTarget.annotation.createdAt}
                                   isCompleted={selectedTarget.annotation.isCompleted}
                                   onClose={() => setSelectedAnnotationId(null)}
-                                  onDelete={async () => {
-                                    setAnnotations((prev) => prev.map((a) => a.id === selectedTarget.annotation.id ? { ...a, isDeleted: true } : a));
-                                    await invokeEdgeFunction("comment", { method: "PATCH", body: { id: selectedTarget.annotation.id, status: "deleted" } });
+                                  onDelete={!commentMutationContext?.share_token || selectedTarget.annotation.canManageComment ? async () => {
+                                    applyLocalAnnotationUpdate(selectedTarget.annotation.id, { isDeleted: true });
+                                    await editOrDeleteComment("delete", { id: selectedTarget.annotation.id });
                                     setSelectedAnnotationId(null);
-                                  }}
-                                  onComplete={async () => {
+                                  } : undefined}
+                                  onComplete={canCompleteComments ? async () => {
                                     const newCompleted = !selectedTarget.annotation.isCompleted;
-                                    setAnnotations((prev) => prev.map((a) => a.id === selectedTarget.annotation.id ? { ...a, isCompleted: newCompleted } : a));
-                                    await invokeEdgeFunction("comment", { method: "PATCH", body: { id: selectedTarget.annotation.id, status: newCompleted ? "completed" : "active" } });
-                                  }}
+                                    applyLocalAnnotationUpdate(selectedTarget.annotation.id, { isCompleted: newCompleted });
+                                    await invokeEdgeFunction("comment", { method: "PATCH", body: { id: selectedTarget.annotation.id, status: newCompleted ? "completed" : "active", ...(commentMutationContext ?? {}) } });
+                                  } : undefined}
+                                  className="max-h-[320px] overflow-y-auto"
+                                  isDragging={draggingId === selectedTarget.annotation.id}
+                                  onDragHandlePointerDown={(e) => selectedTarget.focus && beginDrag(selectedTarget.annotation.id, selectedTarget.focus, e)}
+                                  onDragHandlePointerMove={(e) => updateDrag(e, pageMetrics.renderedWidth, pageMetrics.renderedHeight)}
+                                  onDragHandlePointerUp={(e) => endDrag(e)}
                                 />
                               </div>
                             ) : null}
@@ -795,7 +904,11 @@ export default function WebScreenshotReview({
                             <div
                               ref={overlayRef}
                               className={cn("absolute inset-0 z-10", overlayCursor)}
-                              style={{ touchAction: "none" }}
+                              // Comment/zoom modes only need a plain click
+                              // (no drag), unlike pan and draw -- so they
+                              // don't need to suppress native touch-scroll
+                              // the way those two drag gestures do.
+                              style={{ touchAction: (isPanMode || isDrawMode) ? "none" : "auto" }}
                               onPointerDown={(event) => {
                                 const overlay = event.currentTarget;
                                 const rect = overlay.getBoundingClientRect();
@@ -866,14 +979,14 @@ export default function WebScreenshotReview({
                                   const hadActiveStroke = !!activeStroke;
                                   pointerUp();
                                   if (hadActiveStroke) {
-                                    setInlineComposerText("");
+                                    setInlineComposerText(dockComposerText);
                                     setInlineComposerOpen(true);
                                     showTransientFeedback("Drawing added");
                                   }
                                 } else if (isCommentMode) {
                                   const anchorPoint = commentAnchorRef.current ?? point;
                                   addStroke(createAnchorStroke(anchorPoint, color), true);
-                                  setInlineComposerText("");
+                                  setInlineComposerText(dockComposerText);
                                   setInlineComposerOpen(true);
                                   showTransientFeedback("Anchor placed. Add your note.");
                                 } else if (isZoomMode) {
@@ -915,77 +1028,37 @@ export default function WebScreenshotReview({
                               </div>
                             ) : null}
 
-                            {inlineComposerOpen && draftAnchorFocus ? (
+                            {showAnnotations && inlineComposerOpen && resolvedDraftAnchorFocus ? (
                               <div
                                 className="absolute z-30 w-[280px] max-w-[calc(100%-24px)]"
-                                style={{
-                                  left: `min(calc(${draftAnchorFocus.x * 100}% + 18px), calc(100% - 292px))`,
-                                  top: `max(calc(${draftAnchorFocus.y * 100}% - 12px), 16px)`,
-                                }}
+                                style={getClampedOverlayStyle(
+                                  resolvedDraftAnchorFocus,
+                                  18,
+                                  -12,
+                                  INLINE_COMPOSER_WIDTH_PX,
+                                  INLINE_COMPOSER_ESTIMATED_HEIGHT_PX
+                                )}
                               >
-                                <div className="rounded-2xl border border-white/10 bg-[#0f1422]/96 p-2.5 shadow-[0_18px_44px_rgba(15,23,42,0.28)] backdrop-blur-xl">
-                                  <div className="mb-2 flex items-center justify-between gap-2">
-                                    <div className="flex items-center gap-2">
-                                      <span
-                                        className="h-2.5 w-2.5 rounded-full"
-                                        style={{ backgroundColor: color }}
-                                      />
-                                      <span className="text-[11px] font-medium text-foreground">
-                                        {isDrawMode ? "Add note for this markup" : "Add note here"}
-                                      </span>
-                                    </div>
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon"
-                                      className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
-                                      onClick={() => closeInlineComposer(true)}
-                                    >
-                                      <X className="h-3.5 w-3.5" />
-                                    </Button>
-                                  </div>
-
-                                  <textarea
-                                    ref={inlineComposerRef}
-                                    value={inlineComposerText}
-                                    onChange={(event) => setInlineComposerText(event.target.value)}
-                                    onKeyDown={(event) => {
-                                      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                                        event.preventDefault();
-                                        void submitAnnotation(inlineComposerText);
-                                      }
-                                    }}
-                                    placeholder="Type feedback here..."
-                                    className="min-h-[88px] w-full resize-none rounded-xl border border-white/10 bg-black/10 px-3 py-2 text-sm text-foreground outline-none transition focus:border-white/20 focus:ring-2 focus:ring-white/10 placeholder:text-muted-foreground/70"
-                                  />
-
-                                  <div className="mt-2 flex items-center justify-between gap-2">
-                                    <span className="text-[11px] text-muted-foreground">
-                                      {isDrawMode ? "Markup stays attached to this note." : "Pin stays attached to this note."}
-                                    </span>
-                                    <div className="flex items-center gap-2">
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-8 rounded-md px-2.5 text-xs"
-                                        onClick={() => closeInlineComposer(true)}
-                                      >
-                                        Cancel
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        className="h-8 rounded-md px-2.5 text-xs"
-                                        onClick={() => void submitAnnotation(inlineComposerText)}
-                                        disabled={!inlineComposerText.trim()}
-                                      >
-                                        <Send className="mr-1.5 h-3.5 w-3.5" />
-                                        Add note
-                                      </Button>
-                                    </div>
-                                  </div>
-                                </div>
+                                <InlineNoteComposer
+                                  value={inlineComposerText}
+                                  onChange={(value) => {
+                                    setInlineComposerText(value);
+                                    setDockComposerText(value);
+                                  }}
+                                  color={color}
+                                  label={isDrawMode ? "Add note for this markup" : "Add note here"}
+                                  hint={isDrawMode ? "Markup stays attached to this note." : "Pin stays attached to this note."}
+                                  projectId={projectId}
+                                  organizationId={organizationId}
+                                  workspaceId={workspaceId}
+                                  assetId={assetId}
+                                  onCancel={() => closeInlineComposer(true)}
+                                  onSubmit={() => void submitAnnotation(inlineComposerText)}
+                                  isDragging={draggingId === DRAFT_PIN_ID}
+                                  onDragHandlePointerDown={(e) => beginDrag(DRAFT_PIN_ID, resolvedDraftAnchorFocus, e)}
+                                  onDragHandlePointerMove={(e) => updateDrag(e, pageMetrics.renderedWidth, pageMetrics.renderedHeight)}
+                                  onDragHandlePointerUp={(e) => endDrag(e)}
+                                />
                               </div>
                             ) : null}
                           </div>
@@ -1007,6 +1080,7 @@ export default function WebScreenshotReview({
                               src={imageUrl}
                               alt=""
                               className="pointer-events-none block h-full w-full object-cover object-top"
+                              onError={onMediaError}
                             />
                             <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/8 via-transparent to-black/12" />
                             {annotationTargets.map((entry) => (
@@ -1056,6 +1130,7 @@ export default function WebScreenshotReview({
             </div>
 
             <AnimatePresence>
+              {commentsPanelOpen === false ? null : (
 	              <motion.div
 	                initial={{ x: 40, opacity: 0 }}
 	                animate={{ x: 0, opacity: 1 }}
@@ -1063,16 +1138,16 @@ export default function WebScreenshotReview({
 	                transition={{ duration: 0.18 }}
 	                className={cn(
 	                  "flex min-h-0 w-full flex-1 flex-col lg:h-full lg:flex-none",
-	                  commentsCollapsed ? "lg:w-[56px] lg:min-w-[56px] lg:max-w-[56px]" : "lg:w-[320px] lg:min-w-[300px] lg:max-w-[320px]"
+	                  commentsOpen ? "lg:w-[320px] lg:min-w-[300px] lg:max-w-[320px]" : "lg:w-[56px] lg:min-w-[56px] lg:max-w-[56px]"
 	                )}
 	              >
-	                {commentsCollapsed ? (
+	                {!commentsOpen ? (
 	                  <div className="hidden h-full min-h-0 flex-col items-center border-l border-white/6 bg-[#0b0f1a] px-1.5 py-2 lg:flex">
 	                    <Button
 	                      variant="ghost"
 	                      size="icon"
 	                      className="h-8 w-8 rounded-lg border border-white/8 bg-white/[0.02] text-foreground hover:bg-white/[0.05]"
-	                      onClick={() => setCommentsCollapsed(false)}
+	                      onClick={() => setCommentsOpen(true)}
 	                      aria-label="Show comments"
 	                    >
 	                      <ChevronLeft className="h-4 w-4" />
@@ -1117,6 +1192,8 @@ export default function WebScreenshotReview({
                         hasDrawing: !!annotation.drawing?.length,
                         isCompleted: annotation.isCompleted,
                         isDeleted: annotation.isDeleted,
+                        canManageComment: annotation.canManageComment,
+                        canDeleteComment: annotation.canDeleteComment,
                         createdAt: annotation.createdAt,
                       }))}
                       onItemClick={handleCommentFocus}
@@ -1124,6 +1201,16 @@ export default function WebScreenshotReview({
                       includeTimestamp={false}
                       annotating={isDrawMode}
                       onToggleAnnotating={() => setInteractionMode((mode) => mode === "draw" ? "pan" : "draw")}
+                      reviewMode={isPanMode ? "view" : isCommentMode ? "comment" : isDrawMode ? "draw" : "view"}
+                      onReviewModeChange={(mode) => {
+                        closeInlineComposer(true);
+                        if (mode === "view") {
+                          activateMode("pan");
+                        } else {
+                          setShowAnnotations(true);
+                          activateMode(mode);
+                        }
+                      }}
                       tool={tool}
                       onToolChange={setTool}
                       color={color}
@@ -1132,44 +1219,38 @@ export default function WebScreenshotReview({
                       onUndo={undoStroke}
                       onClear={clearStrokes}
                       onCommentSubmit={submitAnnotation}
+                      commentValue={dockComposerText}
+                      onCommentChange={setDockComposerText}
                       onEditComment={async (id: string, newText: string) => {
-                        setAnnotations((prev) =>
-                          prev.map((annotation) => annotation.id === id ? { ...annotation, text: newText } : annotation)
-                        );
-                        await invokeEdgeFunction("comment", {
-                          method: "PATCH",
-                          body: { id, body: newText },
-                        });
+                        applyLocalAnnotationUpdate(id, { text: newText });
+                        await editOrDeleteComment("edit", { id, body: newText });
                       }}
                       onDeleteComment={async (id: string) => {
-                        setAnnotations((prev) =>
-                          prev.map((annotation) => annotation.id === id ? { ...annotation, isDeleted: true } : annotation)
-                        );
+                        applyLocalAnnotationUpdate(id, { isDeleted: true });
+                        await editOrDeleteComment("delete", { id });
+                      }}
+                      onToggleCompleted={canCompleteComments ? async (id: string) => {
+                        const target = annotations.find((annotation) => annotation.id === id);
+                        applyLocalAnnotationUpdate(id, { isCompleted: !target?.isCompleted });
                         await invokeEdgeFunction("comment", {
                           method: "PATCH",
-                          body: { id, status: "deleted" },
+                          body: { id, status: "completed", ...(commentMutationContext ?? {}) },
                         });
-                      }}
-                      onToggleCompleted={async (id: string) => {
-                        setAnnotations((prev) =>
-                          prev.map((annotation) => annotation.id === id ? { ...annotation, isCompleted: !annotation.isCompleted } : annotation)
-                        );
-                        await invokeEdgeFunction("comment", {
-                          method: "PATCH",
-                          body: { id, status: "completed" },
-                        });
-                      }}
+                      } : undefined}
                       projectId={projectId}
                       organizationId={organizationId}
                       workspaceId={workspaceId}
                       assetId={assetId}
                       asset={asset}
                       onAssetMetadataSave={onAssetMetadataSave}
+                      onRetagAsset={onRetagAsset}
+                      retagStatus={retagStatus}
                       profiles={profiles}
                     />
-                  </div>
-                )}
-              </motion.div>
+	                  </div>
+	                )}
+	              </motion.div>
+              )}
             </AnimatePresence>
           </div>
         </div>

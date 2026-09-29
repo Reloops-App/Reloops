@@ -42,6 +42,9 @@ export interface UploadItem {
     folderId?: string | null;
 
     progress: number;
+    uploadedBytes?: number;
+    uploadStartedAt?: number;
+    uploadFinishedAt?: number;
     status: UploadStatus;
     phase?: UploadPhase;
 
@@ -476,7 +479,7 @@ export function pickParallel(defaultParallel: number) {
 }
 
 /** Upload a small file with a single signed PUT, using XHR to get progress events */
-export async function uploadSingleWithProgress(url: string, file: File, onProgress: (pct: number) => void, signal?: AbortSignal) {
+export async function uploadSingleWithProgress(url: string, file: File, onProgress: (pct: number) => void, signal?: AbortSignal, contentType = file.type || "application/octet-stream") {
     Sentry.captureMessage(`Starting single-put upload for ${file.name}`, {
         level: "info",
         extra: { fileName: file.name, fileSize: file.size }
@@ -486,7 +489,7 @@ export async function uploadSingleWithProgress(url: string, file: File, onProgre
     await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open("PUT", url, true);
-        xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+        xhr.setRequestHeader("Content-Type", contentType);
         xhr.upload.onprogress = (evt) => {
             if (evt.lengthComputable) onProgress(Math.floor((evt.loaded / evt.total) * 100));
         };
@@ -530,3 +533,90 @@ export async function uploadSingleWithProgress(url: string, file: File, onProgre
         xhr.send(file);
     });
 } 
+
+// ---- Ported from Reloops cloud for the project guest portal (additive) ----
+
+export { DANGEROUS_EXTENSIONS, DANGEROUS_MIME_TYPES, isDangerousFile } from "./dangerousFileTypes";
+
+export function formatDuration(ms: number) {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    if (hours > 0) return `${hours}h ${minutes.toString().padStart(2, "0")}m`;
+    if (minutes > 0) return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+    return `${seconds}s`;
+}
+
+export function formatTransferRate(bytesPerSecond: number) {
+    if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return "0 B/s";
+    return `${formatBytes(bytesPerSecond)}/s`;
+}
+
+/** Upload one multipart chunk with byte-level progress. */
+export async function uploadPartWithProgress(
+    url: string,
+    blob: Blob,
+    onProgress: (loadedBytes: number) => void,
+    signal?: AbortSignal
+) {
+    return new Promise<string | undefined>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        let settled = false;
+
+        const cleanup = () => {
+            signal?.removeEventListener("abort", onAbort);
+        };
+        const resolveOnce = (etag?: string) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(etag);
+        };
+        const rejectOnce = (error: Error) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(error);
+        };
+        const onAbort = () => {
+            try {
+                xhr.abort();
+            } catch (abortError) {
+                console.warn("[XHR] Multipart abort failed", abortError);
+            }
+        };
+
+        xhr.open("PUT", url, true);
+        xhr.upload.onprogress = (evt) => {
+            if (evt.lengthComputable) onProgress(Math.min(evt.loaded, blob.size));
+        };
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                onProgress(blob.size);
+                resolveOnce(xhr.getResponseHeader("ETag") ?? undefined);
+            } else {
+                rejectOnce(new Error(`PUT failed: ${xhr.status}`));
+            }
+        };
+        xhr.onerror = () => rejectOnce(new Error("Network error"));
+        xhr.onabort = () => rejectOnce(Object.assign(new Error("AbortError"), { name: "AbortError" }));
+
+        if (signal?.aborted) {
+            xhr.abort();
+            return;
+        }
+
+        signal?.addEventListener("abort", onAbort, { once: true });
+        xhr.send(blob);
+    });
+}
+
+// Reloops OSS has no camera-RAW preview pipeline, so there is no browser-extracted
+// preview to prepare. Same shape as cloud's so the portal code stays identical.
+export type PreparedRawPreview = { cover: Blob; preview: Blob; width: number; height: number; localUrl: string };
+
+export async function prepareRawPreview(_file: File): Promise<PreparedRawPreview | null> {
+    return null;
+}

@@ -8,6 +8,23 @@ export type Stroke = {
   points: { x: number; y: number }[]; // normalized 0..1 or pixel coords
 };
 
+/** Default pin colour — mirrors the first `ReviewModeBar` swatch. */
+export const DEFAULT_PIN_COLOR = "#ff7a00";
+
+/**
+ * A "comment pin" is a degenerate one-point pen stroke carried inside
+ * `annotation.drawing`; the pin's screen position is the centroid of the
+ * drawing bounds (`getAnnotationFocusPoint`). This is the exact shape the
+ * desktop viewers build (`image.tsx` / `pdf.tsx` each keep a private copy) —
+ * exported here so the mobile review shell can build the same annotation.
+ */
+export function createAnchorStroke(
+  point: { x: number; y: number },
+  color: string = DEFAULT_PIN_COLOR,
+): Stroke {
+  return { tool: "pen", color, points: [point] };
+}
+
 export type Annotation = {
   id: string;
   time: number; // seconds; NaN for images
@@ -19,22 +36,28 @@ export type Annotation = {
   drawing?: Stroke[];
   isCompleted?: boolean; // Mark annotation as resolved/completed
   isDeleted?: boolean; // Soft delete flag
+  canManageComment?: boolean; // Server-owned permission for share-link guest comments
+  canDeleteComment?: boolean; // Server-owned: ownership OR workspace-admin override (delete only, not edit)
   createdAt?: string; // ISO timestamp
 };
 
-export function isStrokeLike(s: any): boolean {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+export function isStrokeLike(s: unknown): boolean {
+  if (!isRecord(s)) return false;
   return (
-    s &&
     (s.tool === "pen" || s.tool === "line" || s.tool === "arrow" || typeof s.tool === "string") &&
     Array.isArray(s.points)
   );
 }
 
-export function normalizeStroke(raw: any): Stroke | null {
-  if (!raw) return null;
+export function normalizeStroke(raw: unknown): Stroke | null {
+  if (!isRecord(raw)) return null;
   const tool = (raw.tool === "line" || raw.tool === "arrow" || raw.tool === "rect" ? raw.tool : "pen") as Tool;
   const color: string | undefined = typeof raw.color === "string" ? raw.color : undefined;
-  const pointsRaw: any[] = Array.isArray(raw.points) ? raw.points : [];
+  const pointsRaw = Array.isArray(raw.points) ? raw.points : [];
   const points = pointsRaw
     .map((p) => {
       if (!p) return null;
@@ -43,6 +66,7 @@ export function normalizeStroke(raw: any): Stroke | null {
         if (typeof tx === "number" && typeof ty === "number") return { x: tx, y: ty };
         return null;
       }
+      if (!isRecord(p)) return null;
       let usedPercent = false;
       const x =
         typeof p.x === "number"
@@ -66,12 +90,15 @@ export function normalizeStroke(raw: any): Stroke | null {
     })
     .filter(Boolean) as { x: number; y: number }[];
   if (!points.length) return null;
-  return { tool, color, points };
+  // The live snippet review pins a comment to a page element; that anchor has
+  // to survive this normalization. Absent for every other kind of stroke.
+  const snippet = isRecord(raw.snippet) ? { snippet: raw.snippet } : {};
+  return { tool, color, points, ...snippet } as Stroke;
 }
 
 export function parseDrawing(drawing: unknown): Stroke[] {
   try {
-    let data: any = drawing as any;
+    let data: unknown = drawing;
     if (!data) return [];
     if (typeof data === "string") {
       try {
@@ -83,8 +110,8 @@ export function parseDrawing(drawing: unknown): Stroke[] {
     if (Array.isArray(data)) {
       return data.map((s) => (isStrokeLike(s) ? normalizeStroke(s) : null)).filter(Boolean) as Stroke[];
     }
-    if (data && Array.isArray(data.strokes)) {
-      return (data.strokes as any[]).map((s) => (isStrokeLike(s) ? normalizeStroke(s) : null)).filter(Boolean) as Stroke[];
+    if (isRecord(data) && Array.isArray(data.strokes)) {
+      return data.strokes.map((s) => (isStrokeLike(s) ? normalizeStroke(s) : null)).filter(Boolean) as Stroke[];
     }
     return [];
   } catch {
@@ -92,34 +119,76 @@ export function parseDrawing(drawing: unknown): Stroke[] {
   }
 }
 
-export function normalizeAnnotation(raw: any): Annotation {
-  const id = typeof raw?.id === "string" ? raw.id : (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2));
-  const text = typeof raw?.text === "string" ? raw.text : typeof raw?.body === "string" ? raw.body : "";
+export function normalizeAnnotation(raw: unknown): Annotation {
+  const source = isRecord(raw) ? raw : {};
+  const user = isRecord(source.user) ? source.user : null;
+  const drawingInput = source.drawing;
+  const drawingJsonInput = source.drawing_json;
+  const drawingRecord = isRecord(drawingInput) ? drawingInput : null;
+  const drawingJsonRecord = isRecord(drawingJsonInput) ? drawingJsonInput : null;
+
+  const id = typeof source.id === "string" ? source.id : (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2));
+  const text = typeof source.text === "string" ? source.text : typeof source.body === "string" ? source.body : "";
   const author =
-    typeof raw?.author === "string"
-      ? raw.author
-      : typeof raw?.author_name === "string"
-        ? raw.author_name
-        : typeof raw?.user?.name === "string"
-          ? raw.user.name
+    typeof source.author === "string"
+      ? source.author
+      : typeof source.author_name === "string"
+        ? source.author_name
+        : typeof user?.name === "string"
+          ? user.name
           : undefined;
-  const authorId = typeof raw?.authorId === "string" ? raw.authorId : typeof raw?.author_user_id === "string" ? raw.author_user_id : undefined;
-  const emoji = raw?.emoji && typeof raw.emoji === "object" ? (raw.emoji as { [k: string]: number }) : {};
-  const drawing = parseDrawing(raw?.drawing ?? raw?.drawing_json);
-  const time = typeof raw?.time === "number" && Number.isFinite(raw.time) ? raw.time : Number.NaN;
+  const authorId = typeof source.authorId === "string" ? source.authorId : typeof source.author_user_id === "string" ? source.author_user_id : undefined;
+  const emoji = isRecord(source.emoji) ? (source.emoji as { [k: string]: number }) : {};
+  const drawing = parseDrawing(drawingInput ?? drawingJsonInput);
+  const time = typeof source.time === "number" && Number.isFinite(source.time) ? source.time : Number.NaN;
   const pageCandidate =
-    typeof raw?.page === "number"
-      ? raw.page
-      : typeof raw?.drawing?.page === "number"
-        ? raw.drawing.page
-        : typeof raw?.drawing_json?.page === "number"
-          ? raw.drawing_json.page
+    typeof source.page === "number"
+      ? source.page
+      : typeof drawingRecord?.page === "number"
+        ? drawingRecord.page
+        : typeof drawingJsonRecord?.page === "number"
+          ? drawingJsonRecord.page
           : undefined;
-  const page = Number.isFinite(pageCandidate) && pageCandidate > 0 ? Math.floor(pageCandidate) : undefined;
-  const createdAt = typeof raw?.created_at === "string" ? raw.created_at : typeof raw?.createdAt === "string" ? raw.createdAt : undefined;
-  const isCompleted = raw?.status === 'completed' || raw?.isCompleted === true;
-  const isDeleted = raw?.status === 'deleted' || raw?.isDeleted === true;
-  return { id, time, page, text, author, authorId, emoji, drawing, createdAt, isCompleted, isDeleted } as Annotation;
+  const page = typeof pageCandidate === "number" && Number.isFinite(pageCandidate) && pageCandidate > 0 ? Math.floor(pageCandidate) : undefined;
+  const createdAt = typeof source.created_at === "string" ? source.created_at : typeof source.createdAt === "string" ? source.createdAt : undefined;
+  const isCompleted = source.status === 'completed' || source.isCompleted === true;
+  const isDeleted = source.status === 'deleted' || source.isDeleted === true;
+  const canManageComment = source.can_manage === true || source.canManageComment === true;
+  const canDeleteComment = source.can_delete === true || source.canDeleteComment === true;
+  return { id, time, page, text, author, authorId, emoji, drawing, createdAt, isCompleted, isDeleted, canManageComment, canDeleteComment } as Annotation;
+}
+
+export function normalizeAnnotationList(input: Annotation[] | unknown[] | undefined | null): Annotation[] {
+  if (!input) return [];
+  const arr = Array.isArray(input) ? input : [input];
+  return arr.map((item) => normalizeAnnotation(item));
+}
+
+/**
+ * Re-applies pending local edits (delete/complete/text-edit) on top of a
+ * freshly-arrived `annotations` prop, keyed by annotation id.
+ *
+ * Every viewer keeps its own local `annotations` state and fully replaces it
+ * with the latest prop whenever that prop changes (new comment added,
+ * profile loaded, realtime echo, etc). Without this merge, an optimistic
+ * local mutation -- e.g. marking a comment `isDeleted: true` right after the
+ * user deletes it, before the server round-trip/realtime UPDATE has caught
+ * up -- gets silently discarded by the *next* prop update, which still
+ * carries the old (pre-delete) shape. The deleted comment then visibly
+ * reappears the moment anything else changes the prop (classically: adding
+ * another comment). Keeping a small `overrides` map of only the fields the
+ * user has locally changed, and re-applying it on every merge, means a
+ * pending mutation always wins until the incoming prop itself reflects it --
+ * at which point re-applying the same value is a no-op.
+ */
+export function mergeAnnotationOverrides(
+  items: Annotation[],
+  overrides: Record<string, Partial<Annotation>>
+): Annotation[] {
+  return items.map((item) => {
+    const override = overrides[item.id];
+    return override ? { ...item, ...override } : item;
+  });
 }
 
 function pointToNormalized(
@@ -187,12 +256,15 @@ export function drawStrokes(
   w: number,
   h: number,
   naturalW?: number,
-  naturalH?: number
+  naturalH?: number,
+  options: { lineWidth?: number; arrowHeadSize?: number } = {}
 ) {
   ctx.clearRect(0, 0, w, h);
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  ctx.lineWidth = 6;
+  const lineWidth = options.lineWidth ?? 6;
+  const arrowHeadSize = options.arrowHeadSize ?? 9;
+  ctx.lineWidth = lineWidth;
 
   const toXY = (p: { x: number; y: number }) => {
     const normalized = p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1;
@@ -205,7 +277,7 @@ export function drawStrokes(
 
   const head = (x0: number, y0: number, x1: number, y1: number) => {
     const angle = Math.atan2(y1 - y0, x1 - x0);
-    const size = 9;
+    const size = arrowHeadSize;
     ctx.beginPath();
     ctx.moveTo(x1, y1);
     ctx.lineTo(x1 - size * Math.cos(angle - Math.PI / 6), y1 - size * Math.sin(angle - Math.PI / 6));

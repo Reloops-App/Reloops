@@ -3,7 +3,7 @@ create extension if not exists citext;
 
 create type public.workspace_role as enum ('owner', 'admin', 'member', 'reviewer', 'billing');
 create type public.asset_status as enum ('needs_review', 'in_review', 'approved', 'published', 'archived', 'deleted');
-create type public.share_subject_type as enum ('asset', 'collection');
+create type public.share_subject_type as enum ('asset', 'collection', 'project');
 
 create table public.organizations (
   id uuid primary key default gen_random_uuid(),
@@ -113,6 +113,11 @@ create table public.assets (
   approval_status text,
   created_by_api_key_id uuid,
   uploaded_by_api_key_id uuid,
+  uploaded_via_share_link_id uuid,
+  uploaded_by_guest_name text,
+  uploaded_by_guest_email citext,
+  updated_by_guest_name text,
+  updated_by_guest_email citext,
   assigned_to_api_key_id uuid,
   updated_by_api_key_id uuid,
   created_at timestamptz not null default now(),
@@ -135,6 +140,7 @@ create table public.asset_comments (
   drawing_json jsonb,
   media_ms_start integer,
   media_ms_end integer,
+  guest_author_token_hash text,
   status text not null default 'active' check (status in ('active', 'completed', 'deleted')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -286,15 +292,35 @@ create table public.share_links (
   token text not null unique,
   asset_id uuid references public.assets(id) on delete cascade,
   parent_asset_id uuid references public.assets(id) on delete cascade,
+  project_id uuid references public.projects(id) on delete cascade,
+  folder_id uuid references public.folders(id) on delete cascade,
   token_hash text,
   can_comment boolean not null default true,
   allow_download boolean not null default true,
   allow_comments boolean not null default true,
+  allow_upload boolean not null default false,
+  password_hash text,
+  folder_ids uuid[],
+  asset_root_ids uuid[],
+  access_count integer not null default 0,
+  last_accessed_at timestamptz,
   expires_at timestamptz,
   revoked_at timestamptz,
   created_by uuid references auth.users(id) on delete set null default auth.uid(),
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint share_links_project_scope_check check (
+    (subject_type = 'project' and project_id = subject_id)
+    or (subject_type <> 'project' and project_id is null and folder_id is null and not allow_upload)
+  ),
+  constraint share_links_selection_requires_project_check check ((folder_ids is null and asset_root_ids is null) or project_id is not null),
+  constraint share_links_selection_not_empty_check check (folder_ids is null or array_length(folder_ids, 1) > 0),
+  constraint share_links_selection_assets_not_empty_check check (asset_root_ids is null or array_length(asset_root_ids, 1) > 0),
+  constraint share_links_folder_id_selection_mutually_exclusive_check check (folder_id is null or (folder_ids is null and asset_root_ids is null))
 );
+
+alter table public.assets
+  add constraint assets_uploaded_via_share_link_fkey
+  foreign key (uploaded_via_share_link_id) references public.share_links(id) on delete set null;
 
 create table public.asset_intelligence_jobs (
   id uuid primary key default gen_random_uuid(),
@@ -333,6 +359,8 @@ create unique index api_keys_key_hash_unique_idx on public.api_keys (key_hash) w
 create index project_asset_links_asset_root_project_idx on public.project_asset_links (asset_root_id, project_id);
 create index share_links_asset_created_idx on public.share_links (asset_id, created_at desc);
 create unique index share_links_token_hash_unique_idx on public.share_links (token_hash) where token_hash is not null;
+create index share_links_project_created_idx on public.share_links (project_id, created_at desc) where project_id is not null;
+create index assets_guest_share_idx on public.assets (uploaded_via_share_link_id) where uploaded_via_share_link_id is not null;
 create index asset_intelligence_jobs_claim_idx on public.asset_intelligence_jobs (status, lease_expires_at, created_at);
 create index asset_intelligence_jobs_asset_idx on public.asset_intelligence_jobs (asset_id, created_at desc);
 create index asset_intelligence_jobs_batch_idx on public.asset_intelligence_jobs (upload_batch_id, workspace_id, project_id);
@@ -768,3 +796,23 @@ create policy storage_avatars_update_auth on storage.objects for update using (
 create policy storage_workspaces_update_auth on storage.objects for update using (
   bucket_id = 'workspaces' and auth.uid() is not null
 );
+
+grant usage on schema public to anon, authenticated, service_role;
+
+grant select, insert, update, delete on all tables in schema public to authenticated;
+grant select on all tables in schema public to anon;
+grant all privileges on all tables in schema public to service_role;
+
+grant usage, select on all sequences in schema public to authenticated;
+grant usage, select on all sequences in schema public to anon;
+grant all privileges on all sequences in schema public to service_role;
+
+grant execute on all functions in schema public to anon, authenticated, service_role;
+
+alter default privileges in schema public grant select, insert, update, delete on tables to authenticated;
+alter default privileges in schema public grant select on tables to anon;
+alter default privileges in schema public grant all privileges on tables to service_role;
+alter default privileges in schema public grant usage, select on sequences to authenticated;
+alter default privileges in schema public grant usage, select on sequences to anon;
+alter default privileges in schema public grant all privileges on sequences to service_role;
+alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;

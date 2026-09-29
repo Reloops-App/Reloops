@@ -335,7 +335,7 @@ export default function ShareCollectionAsset() {
 
   return (
     <div className="flex h-screen flex-col">
-      <ShareAuthDialog open={identityPromptOpen && !identity} onIdentify={handleIdentity} />
+      <ShareAuthDialog open={identityPromptOpen && !identity} onIdentify={handleIdentity} onClose={() => setIdentityPromptOpen(false)} />
 
       <header className="sticky top-0 z-40 flex-shrink-0 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="flex h-14 items-center gap-3 px-3">
@@ -374,8 +374,7 @@ export default function ShareCollectionAsset() {
               variant="outline"
               size="sm"
               onClick={() => {
-                const downloadUrl = `${import.meta.env.VITE_ASSET_PUBLIC_BASE_URL}${storagePath}`;
-                void downloadFile(downloadUrl, asset.title || asset.name || "asset");
+                void downloadFile(reviewAssetUrl, asset.title || asset.name || "asset");
               }}
             >
               <DownloadIcon className="h-4 w-4" />

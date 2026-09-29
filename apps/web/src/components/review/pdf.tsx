@@ -1,22 +1,36 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
-import { ZoomIn, ZoomOut, Maximize2, Download, FileText, MessageSquare, Pencil, Slash, MoveRight, Square, Undo2 } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize2, Download, FileText, Rows3, Columns3, Move } from "lucide-react";
 import { cn, downloadFile } from "@/lib/utils";
+import { resolveAssetDownloadUrl } from "@/lib/mediaDelivery";
 import type { Annotation, Stroke } from "./annotator-utils";
-import { drawStrokes, getAnnotationFocusPoint, getDrawingBounds, normalizeAnnotation } from "./annotator-utils";
+import { drawStrokes, getAnnotationFocusPoint, getDrawingBounds, mergeAnnotationOverrides, normalizeAnnotationList } from "./annotator-utils";
 import { useDrawing } from "./shared/useDrawing";
 import CommentsPanel from "./CommentsPanel";
 import { getLoggedInUserProfile } from "@/lib/supabaseClient";
 import { invokeEdgeFunction } from "@/api/edge";
+import { convertMentionsForDisplay } from "@/lib/mentionUtils";
+import { getAvatarInitials } from "@/lib/avatar-utils";
 import { ReviewModeBar } from "./shared/ReviewModeBar";
 import { InlineNoteComposer } from "./shared/InlineNoteComposer";
+import { BubblePin } from "./shared/PinMarker";
+import { CommentPopover } from "./shared/CommentPopover";
+import type { CommentMutationContext } from "@/lib/shareGuestIdentity";
+import { useDraggablePin } from "./shared/useDraggablePin";
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+
+const DRAFT_PIN_ID = "__draft-anchor__";
+
+type ReviewProfile = {
+  id: string;
+  display_name?: string | null;
+  avatar_url?: string | null;
+};
 
 type PdfAnnotatorProps = {
   pdfUrl?: string;
@@ -35,8 +49,6 @@ type PdfAnnotatorProps = {
     tags?: string[] | null;
     smart_tags?: string[] | null;
     smart_description?: string | null;
-    ai_description?: string | null;
-    ai_metadata?: Record<string, any> | null;
     status?: string | null;
     assigned_to?: string | null;
     uploaded_by?: string | null;
@@ -50,22 +62,148 @@ type PdfAnnotatorProps = {
     duration_ms?: number | null;
     version_no?: number | null;
     storage_path: string;
+    signed_url?: string | null;
+    delivery_url?: string | null;
+    cdn_url?: string | null;
   } | null;
   onAssetMetadataSave?: (patch: { description: string | null; tags: string[] }) => Promise<void> | void;
-  profiles?: Record<string, {
-    id: string;
-    display_name?: string | null;
-    avatar_url?: string | null;
-  }>;
+  onRetagAsset?: () => void;
+  retagStatus?: "idle" | "queued" | "error";
+  commentsPanelOpen?: boolean;
+  onCommentsPanelOpenChange?: (open: boolean) => void;
+  commentMutationContext?: CommentMutationContext;
+  // Which edge function edit/delete calls target — defaults to the shared
+  // "comment" function used by every existing caller. A share flow with its
+  // own isolated comment function can point this elsewhere without changing
+  // behavior for anyone else.
+  commentEndpoint?: string;
+  onMediaError?: () => void;
+  fallbackDownloadUrl?: string | null;
+  profiles?: Record<string, ReviewProfile>;
 };
 
 type InteractionMode = "browse" | "comment" | "draw";
+type PdfScrollMode = "vertical" | "horizontal";
+type PdfPageSize = {
+  width: number;
+  height: number;
+};
+
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 3;
+const INLINE_COMPOSER_WIDTH = 280;
+const INLINE_COMPOSER_ESTIMATED_HEIGHT = 168;
+const INLINE_COMPOSER_MARGIN = 12;
+const INLINE_COMPOSER_ANCHOR_GAP = 18;
+const PDF_PIN_SIZE = 32;
+const PDF_DRAFT_PIN_SIZE = 28;
+const COMMENT_POPOVER_WIDTH = 280;
+const COMMENT_POPOVER_ESTIMATED_HEIGHT = 320;
+
+function hasPdfPageAnchor(annotation: Annotation) {
+  return Boolean(annotation.page && annotation.drawing?.length);
+}
+
+function cleanDisplayName(value?: string | null) {
+  const trimmed = value?.trim();
+  const normalized = trimmed?.toLowerCase();
+  if (!trimmed || trimmed === "?" || trimmed === "??" || normalized === "unknown" || normalized === "unknown user") {
+    return null;
+  }
+  return trimmed;
+}
+
+function getPdfAnnotationAuthorName(annotation: Annotation, profiles: Record<string, ReviewProfile>) {
+  const profileName = annotation.authorId ? profiles[annotation.authorId]?.display_name : null;
+  return cleanDisplayName(profileName) ?? cleanDisplayName(annotation.author);
+}
+
+function clampZoom(value: number) {
+  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number(value.toFixed(2))));
+}
 
 function createAnchorStroke(point: { x: number; y: number }, color: string): Stroke {
   return {
     tool: "pen",
     color,
     points: [point],
+  };
+}
+
+function getScaledPageOverlayStyle(
+  anchor: { x: number; y: number },
+  visualScale: number,
+  visualPageWidth: number,
+  width: number,
+  estimatedHeight: number,
+  xOffset: number,
+  yOffset: number
+): CSSProperties {
+  const safeScale = Math.max(MIN_ZOOM, visualScale);
+  const composerWidth = Math.min(
+    width,
+    Math.max(180, visualPageWidth - INLINE_COMPOSER_MARGIN * 2)
+  );
+  const margin = INLINE_COMPOSER_MARGIN / safeScale;
+  const xOffsetPx = xOffset / safeScale;
+  const yOffsetPx = yOffset / safeScale;
+  const maxLeftInset = (composerWidth + INLINE_COMPOSER_MARGIN) / safeScale;
+  const maxTopInset = (estimatedHeight + INLINE_COMPOSER_MARGIN) / safeScale;
+
+  return {
+    width: `${composerWidth}px`,
+    left: `min(max(calc(${anchor.x * 100}% + ${xOffsetPx}px), ${margin}px), max(0px, calc(100% - ${maxLeftInset}px)))`,
+    top: `min(max(calc(${anchor.y * 100}% + ${yOffsetPx}px), ${margin}px), max(0px, calc(100% - ${maxTopInset}px)))`,
+    transform: `scale(${1 / safeScale})`,
+    transformOrigin: "top left",
+  };
+}
+
+function getScaledInlineComposerStyle(
+  anchor: { x: number; y: number },
+  visualScale: number,
+  visualPageWidth: number
+): CSSProperties {
+  return getScaledPageOverlayStyle(
+    anchor,
+    visualScale,
+    visualPageWidth,
+    INLINE_COMPOSER_WIDTH,
+    INLINE_COMPOSER_ESTIMATED_HEIGHT,
+    INLINE_COMPOSER_ANCHOR_GAP,
+    -INLINE_COMPOSER_MARGIN
+  );
+}
+
+function getScaledCommentPopoverStyle(
+  anchor: { x: number; y: number },
+  visualScale: number,
+  visualPageWidth: number
+): CSSProperties {
+  return getScaledPageOverlayStyle(
+    anchor,
+    visualScale,
+    visualPageWidth,
+    COMMENT_POPOVER_WIDTH,
+    COMMENT_POPOVER_ESTIMATED_HEIGHT,
+    24,
+    -18
+  );
+}
+
+function getScaledPagePointStyle(
+  anchor: { x: number; y: number },
+  visualScale: number,
+  size: number
+): CSSProperties {
+  const safeScale = Math.max(MIN_ZOOM, visualScale);
+  const inset = (size / 2) / safeScale;
+
+  return {
+    left: `min(max(${anchor.x * 100}%, ${inset}px), calc(100% - ${inset}px))`,
+    top: `min(max(${anchor.y * 100}%, ${inset}px), calc(100% - ${inset}px))`,
+    transform: `translate(-50%, -50%) scale(${1 / safeScale})`,
+    transformOrigin: "center",
   };
 }
 
@@ -162,6 +300,8 @@ function PdfPageOverlay({
     const handlePointerDown = (event: PointerEvent) => {
       onActivate(pageNumber);
       if (interactionMode === "comment") {
+        event.preventDefault();
+        overlay.setPointerCapture(event.pointerId);
         onPointerDown(toNormalized(event));
         return;
       }
@@ -177,6 +317,11 @@ function PdfPageOverlay({
       const point = toNormalized(event);
       if (interactionMode === "comment") {
         onPointerUp(point);
+        try {
+          overlay.releasePointerCapture(event.pointerId);
+        } catch {
+          // noop
+        }
         return;
       }
       if (!annotating) return;
@@ -200,7 +345,11 @@ function PdfPageOverlay({
     overlay.addEventListener("pointermove", handlePointerMove);
     overlay.addEventListener("pointerup", handlePointerUp);
     overlay.addEventListener("pointercancel", handlePointerCancel);
-    overlay.style.touchAction = "none";
+    // Only draw mode drags (a stroke); browse and comment modes only need a
+    // plain click/tap, so they don't need to suppress native touch-scroll
+    // the way an active drag does. This was previously unconditional,
+    // blocking touch-scroll of PDF pages in every mode, not just comment.
+    overlay.style.touchAction = annotating ? "none" : "auto";
     return () => {
       overlay.removeEventListener("pointerdown", handlePointerDown);
       overlay.removeEventListener("pointermove", handlePointerMove);
@@ -237,24 +386,64 @@ export default function PdfAnnotatorWithAnnotations({
   assetId,
   asset,
   onAssetMetadataSave,
+  onRetagAsset,
+  retagStatus,
+  commentsPanelOpen,
+  commentMutationContext,
+  commentEndpoint = "comment",
+  onMediaError,
+  fallbackDownloadUrl,
   profiles = {},
 }: PdfAnnotatorProps) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const currentPageRef = useRef(1);
   const [numPages, setNumPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [activePage, setActivePage] = useState(1);
   const [viewerWidth, setViewerWidth] = useState(0);
   const [scale, setScale] = useState(1);
+  const [pageSizes, setPageSizes] = useState<Record<number, PdfPageSize>>({});
+  const [pageAspectRatios, setPageAspectRatios] = useState<Record<number, number>>({});
   const [showAnnotations, setShowAnnotations] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [interactionMode, setInteractionMode] = useState<InteractionMode>("browse");
+  const [scrollMode, setScrollMode] = useState<PdfScrollMode>("vertical");
+  const panelOpen = commentsPanelOpen ?? true;
+  const canCompleteComments = !commentMutationContext?.share_token;
+
+  // Edit/delete target the "comment" function by default (unchanged for
+  // every existing caller). A share flow with its own isolated comment
+  // function passes commentEndpoint to route here instead — that function
+  // takes an action-based POST body rather than comment's PATCH-with-status.
+  const editOrDeleteComment = useCallback(async (action: "edit" | "delete", fields: { id: string; body?: string }) => {
+    if (commentEndpoint === "comment") {
+      const patchBody: Record<string, unknown> = { id: fields.id, ...(commentMutationContext ?? {}) };
+      if (action === "edit") patchBody.body = fields.body;
+      else patchBody.status = "deleted";
+      return invokeEdgeFunction("comment", { method: "PATCH", body: patchBody });
+    }
+    return invokeEdgeFunction(commentEndpoint, {
+      method: "POST",
+      body: { action, id: fields.id, body: fields.body, ...(commentMutationContext ?? {}) },
+    });
+  }, [commentEndpoint, commentMutationContext]);
+
   const [scrollMetrics, setScrollMetrics] = useState({
     progress: 0,
     thumbTopPercent: 0,
     thumbHeightPercent: 100,
     scrollable: false,
   });
+
+  useEffect(() => {
+    setLoadError(null);
+    setNumPages(0);
+    setCurrentPage(1);
+    setActivePage(1);
+    setPageSizes({});
+    setPageAspectRatios({});
+  }, [pdfUrl]);
 
   const {
     setAnnotating,
@@ -273,16 +462,20 @@ export default function PdfAnnotatorWithAnnotations({
     addStroke,
   } = useDrawing();
 
-  const [annotations, setAnnotations] = useState<Annotation[]>(annotationsProp ?? []);
+  const [annotationOverrides, setAnnotationOverrides] = useState<Record<string, Partial<Annotation>>>({});
+  const [annotations, setAnnotations] = useState<Annotation[]>(() => normalizeAnnotationList(annotationsProp));
   useEffect(() => {
     if (!annotationsProp) return;
-    try {
-      const arr = Array.isArray(annotationsProp) ? annotationsProp : [annotationsProp];
-      setAnnotations(arr.map((item) => normalizeAnnotation(item)));
-    } catch {
-      setAnnotations(annotationsProp as Annotation[]);
-    }
-  }, [annotationsProp]);
+    setAnnotations(mergeAnnotationOverrides(normalizeAnnotationList(annotationsProp), annotationOverrides));
+  }, [annotationOverrides, annotationsProp]);
+
+  const applyLocalAnnotationUpdate = useCallback((id: string, patch: Partial<Annotation>) => {
+    setAnnotationOverrides((current) => ({
+      ...current,
+      [id]: { ...current[id], ...patch },
+    }));
+    setAnnotations((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }, []);
 
   const liveStrokes = useMemo<Stroke[]>(
     () => [...draftStrokes, ...(activeStroke ? [activeStroke] : [])],
@@ -298,8 +491,14 @@ export default function PdfAnnotatorWithAnnotations({
       y: (draftAnchorBounds.minY + draftAnchorBounds.maxY) / 2,
     }
     : null;
+  const { resolveFocus, beginDrag, updateDrag, endDrag, draggingId } = useDraggablePin();
+  const resolvedDraftAnchorFocus = draftAnchorFocus
+    ? resolveFocus(DRAFT_PIN_ID, draftAnchorFocus)
+    : null;
   const [inlineComposerOpen, setInlineComposerOpen] = useState(false);
   const [inlineComposerText, setInlineComposerText] = useState("");
+  const [dockComposerText, setDockComposerText] = useState("");
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
 
   useEffect(() => {
     setAnnotating(interactionMode === "draw");
@@ -313,16 +512,33 @@ export default function PdfAnnotatorWithAnnotations({
     }
   }, [clearStrokes]);
 
+  const visibleAnnotations = useMemo(
+    () => annotations.filter((annotation) => !annotation.isDeleted),
+    [annotations]
+  );
+
+  useEffect(() => {
+    if (!selectedAnnotationId) return;
+    if (!visibleAnnotations.some((annotation) => annotation.id === selectedAnnotationId)) {
+      setSelectedAnnotationId(null);
+    }
+  }, [selectedAnnotationId, visibleAnnotations]);
+
   const annotationsByPage = useMemo(() => {
     const grouped = new Map<number, Annotation[]>();
-    for (const annotation of annotations) {
+    for (const annotation of visibleAnnotations) {
+      if (!hasPdfPageAnchor(annotation)) continue;
       const page = annotation.page ?? 1;
       const bucket = grouped.get(page) ?? [];
       bucket.push(annotation);
       grouped.set(page, bucket);
     }
     return grouped;
-  }, [annotations]);
+  }, [visibleAnnotations]);
+
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -339,14 +555,16 @@ export default function PdfAnnotatorWithAnnotations({
     if (!viewer) return;
 
     if (numPages > 0) {
-      const rootTop = viewer.getBoundingClientRect().top;
+      const rootRect = viewer.getBoundingClientRect();
+      const rootOffset = scrollMode === "horizontal" ? rootRect.left : rootRect.top;
       let bestPage = 1;
       let bestDistance = Number.POSITIVE_INFINITY;
       for (let page = 1; page <= numPages; page += 1) {
         const node = pageRefs.current[page];
         if (!node) continue;
         const rect = node.getBoundingClientRect();
-        const distance = Math.abs(rect.top - rootTop - 24);
+        const pageOffset = scrollMode === "horizontal" ? rect.left : rect.top;
+        const distance = Math.abs(pageOffset - rootOffset - 24);
         if (distance < bestDistance) {
           bestDistance = distance;
           bestPage = page;
@@ -355,10 +573,13 @@ export default function PdfAnnotatorWithAnnotations({
       setCurrentPage(bestPage);
     }
 
-    const maxScroll = Math.max(0, viewer.scrollHeight - viewer.clientHeight);
-    const progress = maxScroll > 0 ? viewer.scrollTop / maxScroll : 0;
-    const thumbHeightPercent = viewer.scrollHeight > 0
-      ? Math.min(100, Math.max(12, (viewer.clientHeight / viewer.scrollHeight) * 100))
+    const scrollSize = scrollMode === "horizontal" ? viewer.scrollWidth : viewer.scrollHeight;
+    const viewportSize = scrollMode === "horizontal" ? viewer.clientWidth : viewer.clientHeight;
+    const scrollPosition = scrollMode === "horizontal" ? viewer.scrollLeft : viewer.scrollTop;
+    const maxScroll = Math.max(0, scrollSize - viewportSize);
+    const progress = maxScroll > 0 ? scrollPosition / maxScroll : 0;
+    const thumbHeightPercent = scrollSize > 0
+      ? Math.min(100, Math.max(12, (viewportSize / scrollSize) * 100))
       : 100;
     const thumbTopPercent = maxScroll > 0 ? progress * (100 - thumbHeightPercent) : 0;
 
@@ -368,7 +589,7 @@ export default function PdfAnnotatorWithAnnotations({
       thumbHeightPercent,
       scrollable: maxScroll > 0,
     });
-  }, [numPages]);
+  }, [numPages, scrollMode]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -385,14 +606,89 @@ export default function PdfAnnotatorWithAnnotations({
     };
   }, [updateViewerState]);
 
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || scrollMode !== "horizontal") return;
+
+    const handleWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+      if (viewer.scrollWidth <= viewer.clientWidth) return;
+      if (viewer.scrollHeight > viewer.clientHeight) return;
+      event.preventDefault();
+      viewer.scrollLeft += event.deltaY;
+    };
+
+    viewer.addEventListener("wheel", handleWheel, { passive: false });
+    return () => viewer.removeEventListener("wheel", handleWheel);
+  }, [scrollMode]);
+
+  // The native scrollbar is hidden on `viewerRef` (see its className below),
+  // so the custom bar rendered further down is the only way to manually
+  // scroll by clicking/dragging -- mutating scrollLeft/scrollTop directly
+  // here is picked up by the existing scroll listener (updateViewerState),
+  // which re-renders the thumb, so no extra state is needed for the drag.
+  const handleScrollbarPointerDown = useCallback(
+    (axis: "horizontal" | "vertical") => (event: ReactPointerEvent<HTMLDivElement>) => {
+      const viewer = viewerRef.current;
+      if (!viewer) return;
+      event.preventDefault();
+      const track = event.currentTarget;
+
+      const applyFromClientPosition = (clientPos: number) => {
+        const rect = track.getBoundingClientRect();
+        const trackSize = axis === "horizontal" ? rect.width : rect.height;
+        if (trackSize <= 0) return;
+        const offset = axis === "horizontal" ? clientPos - rect.left : clientPos - rect.top;
+        const fraction = Math.min(1, Math.max(0, offset / trackSize));
+        const maxScroll = Math.max(
+          0,
+          axis === "horizontal" ? viewer.scrollWidth - viewer.clientWidth : viewer.scrollHeight - viewer.clientHeight,
+        );
+        if (axis === "horizontal") viewer.scrollLeft = fraction * maxScroll;
+        else viewer.scrollTop = fraction * maxScroll;
+      };
+
+      applyFromClientPosition(axis === "horizontal" ? event.clientX : event.clientY);
+
+      const handlePointerMove = (moveEvent: PointerEvent) => {
+        applyFromClientPosition(axis === "horizontal" ? moveEvent.clientX : moveEvent.clientY);
+      };
+      const handlePointerUp = () => window.removeEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointermove", handlePointerMove);
+      window.addEventListener("pointerup", handlePointerUp, { once: true });
+    },
+    [],
+  );
+
   const zoomPct = Math.round(scale * 100);
-  const renderWidth = viewerWidth > 0 ? Math.max(100, Math.floor((viewerWidth - 32) * scale)) : undefined;
+  const baseRenderWidth = viewerWidth > 0 ? Math.max(100, Math.floor(viewerWidth - 32)) : undefined;
+  const renderWidth = baseRenderWidth;
+  const visualScale = scale;
+
+  const zoomTo = useCallback((getNextScale: (current: number) => number) => {
+    const viewer = viewerRef.current;
+    const centerX = viewer ? (viewer.scrollLeft + viewer.clientWidth / 2) / Math.max(1, viewer.scrollWidth) : 0.5;
+    const centerY = viewer ? (viewer.scrollTop + viewer.clientHeight / 2) / Math.max(1, viewer.scrollHeight) : 0.5;
+
+    setScale((current) => {
+      const next = clampZoom(getNextScale(current));
+      window.requestAnimationFrame(() => {
+        const latestViewer = viewerRef.current;
+        if (!latestViewer) return;
+        latestViewer.scrollLeft = centerX * latestViewer.scrollWidth - latestViewer.clientWidth / 2;
+        latestViewer.scrollTop = centerY * latestViewer.scrollHeight - latestViewer.clientHeight / 2;
+        updateViewerState();
+      });
+      return next;
+    });
+  }, [updateViewerState]);
+
   const zoomOut = useCallback(() => {
-    setScale((value) => Math.max(0.1, Number((value / 1.25).toFixed(2))));
-  }, []);
+    zoomTo((value) => value / 1.25);
+  }, [zoomTo]);
   const zoomIn = useCallback(() => {
-    setScale((value) => Math.min(3, Number((value * 1.25).toFixed(2))));
-  }, []);
+    zoomTo((value) => value * 1.25);
+  }, [zoomTo]);
   const setBrowseMode = useCallback(() => {
     closeInlineComposer(true);
     setInteractionMode("browse");
@@ -408,40 +704,64 @@ export default function PdfAnnotatorWithAnnotations({
     setInteractionMode("draw");
     setTool(nextTool);
   }, [closeInlineComposer, setTool]);
-  const colorChoices = ["#ff7a00", "#22c55e", "#3b82f6", "#eab308", "#ef4444"];
-
-  const visibleAnnotations = useMemo(
-    () => annotations.filter((annotation) => !annotation.isDeleted),
-    [annotations]
-  );
-
   const annotationPinsByPage = useMemo(() => {
-    const grouped = new Map<number, Array<{ id: string; x: number; y: number; index: number; color: string; text: string }>>();
-    visibleAnnotations.forEach((annotation, index) => {
+    const grouped = new Map<number, Array<{
+      id: string;
+      x: number;
+      y: number;
+      color: string;
+      text: string;
+      displayName: string | null;
+      annotation: Annotation;
+    }>>();
+    visibleAnnotations.forEach((annotation) => {
+      if (!hasPdfPageAnchor(annotation)) return;
       const focus = getAnnotationFocusPoint(annotation);
       if (!focus) return;
       const page = annotation.page ?? 1;
       const bucket = grouped.get(page) ?? [];
       const colorValue = annotation.drawing?.[0]?.color || "#ff7a00";
-      bucket.push({ id: annotation.id, x: focus.x, y: focus.y, index: index + 1, color: colorValue, text: annotation.text });
+      bucket.push({
+        id: annotation.id,
+        x: focus.x,
+        y: focus.y,
+        color: colorValue,
+        text: annotation.text,
+        displayName: getPdfAnnotationAuthorName(annotation, profiles),
+        annotation,
+      });
       grouped.set(page, bucket);
     });
     return grouped;
-  }, [visibleAnnotations]);
+  }, [profiles, visibleAnnotations]);
 
   const scrollToPage = useCallback((page: number) => {
     const node = pageRefs.current[page];
     if (!node) return;
-    node.scrollIntoView({ behavior: "smooth", block: "start" });
+    node.scrollIntoView({
+      behavior: "smooth",
+      block: scrollMode === "horizontal" ? "nearest" : "start",
+      inline: scrollMode === "horizontal" ? "start" : "nearest",
+    });
     setCurrentPage(page);
     setActivePage(page);
-  }, []);
+  }, [scrollMode]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      scrollToPage(currentPageRef.current);
+      updateViewerState();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [scrollMode, scrollToPage, updateViewerState]);
 
   const handleDocumentLoad = useCallback((doc: PDFDocumentProxy) => {
     setNumPages(doc.numPages);
     setLoadError(null);
     setCurrentPage(1);
     setActivePage(1);
+    setPageSizes({});
+    setPageAspectRatios({});
     requestAnimationFrame(updateViewerState);
 
     // Auto-fit to view height on load
@@ -466,45 +786,116 @@ export default function PdfAnnotatorWithAnnotations({
     }).catch(console.error);
   }, [updateViewerState]);
 
+  const handlePageMeasured = useCallback((pageNumber: number, page: PdfPageSize) => {
+    const width = Math.max(1, page.width);
+    const height = Math.max(1, page.height);
+    const aspectRatio = height / width;
+
+    setPageSizes((current) => {
+      const previous = current[pageNumber];
+      if (previous && Math.abs(previous.width - width) < 1 && Math.abs(previous.height - height) < 1) {
+        return current;
+      }
+      return { ...current, [pageNumber]: { width, height } };
+    });
+
+    setPageAspectRatios((current) => {
+      const previous = current[pageNumber];
+      if (previous && Math.abs(previous - aspectRatio) < 0.001) {
+        return current;
+      }
+      return { ...current, [pageNumber]: aspectRatio };
+    });
+  }, []);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(updateViewerState);
+    return () => window.cancelAnimationFrame(frame);
+  }, [pageSizes, scale, updateViewerState]);
+
   const handleCommentSubmit = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
     try {
+      const user = await getLoggedInUserProfile();
+      const drawing = [...liveStrokes];
+      const anchoredPage = drawing.length > 0 ? activePage || currentPage || 1 : undefined;
       const payload: Annotation = {
         id: globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2),
         time: Number.NaN,
-        page: activePage || currentPage || 1,
+        page: anchoredPage,
         text: trimmed,
-        author: await getLoggedInUserProfile().then((user) => user?.full_name),
-        authorId: await getLoggedInUserProfile().then((user) => user?.sub),
+        author: user?.full_name,
+        authorId: user?.sub,
         isCompleted: false,
         isDeleted: false,
         createdAt: new Date().toISOString(),
         emoji: {},
-        drawing: [...liveStrokes],
+        drawing,
       };
 
-      setAnnotations((prev) => (prev.some((item) => item.id === payload.id) ? prev : [...prev, payload]));
+      if (!onAddAnnotation) {
+        setAnnotations((prev) => (prev.some((item) => item.id === payload.id) ? prev : [...prev, payload]));
+      }
       closeInlineComposer(true);
       setInteractionMode("browse");
 
       if (onAddAnnotation) {
         await onAddAnnotation(payload);
       }
+      setDockComposerText("");
     } catch (error) {
       console.error("Failed to submit PDF comment", error);
     }
   }, [activePage, closeInlineComposer, currentPage, liveStrokes, onAddAnnotation]);
 
-  const filteredAnnotations = useMemo(() => annotations, [annotations]);
+  const handleEditComment = useCallback(async (id: string, newText: string) => {
+    const previous = annotations.find((item) => item.id === id);
+    applyLocalAnnotationUpdate(id, { text: newText });
+    const { error } = await editOrDeleteComment("edit", { id, body: newText });
+    if (error) {
+      if (previous) applyLocalAnnotationUpdate(id, { text: previous.text });
+      console.error("Failed to edit PDF comment", error);
+    }
+  }, [annotations, applyLocalAnnotationUpdate, editOrDeleteComment]);
+
+  const handleDeleteComment = useCallback(async (id: string) => {
+    const previous = annotations.find((item) => item.id === id);
+    applyLocalAnnotationUpdate(id, { isDeleted: true });
+    if (selectedAnnotationId === id) setSelectedAnnotationId(null);
+    const { error } = await editOrDeleteComment("delete", { id });
+    if (error) {
+      if (previous) {
+        applyLocalAnnotationUpdate(id, { isDeleted: previous.isDeleted });
+        setSelectedAnnotationId(id);
+      }
+      console.error("Failed to delete PDF comment", error);
+    }
+  }, [annotations, applyLocalAnnotationUpdate, editOrDeleteComment, selectedAnnotationId]);
+
+  const handleToggleCompleted = useCallback(async (id: string) => {
+    const annotation = annotations.find((item) => item.id === id);
+    const nextCompleted = !annotation?.isCompleted;
+    applyLocalAnnotationUpdate(id, { isCompleted: nextCompleted });
+    const { error } = await invokeEdgeFunction("comment", {
+      method: "PATCH",
+      body: { id, status: nextCompleted ? "completed" : "active", ...(commentMutationContext ?? {}) },
+    });
+    if (error) {
+      applyLocalAnnotationUpdate(id, { isCompleted: annotation?.isCompleted });
+      console.error("Failed to update PDF comment status", error);
+    }
+  }, [annotations, applyLocalAnnotationUpdate, commentMutationContext]);
+
+  const filteredAnnotations = useMemo(() => visibleAnnotations, [visibleAnnotations]);
 
   return (
     <div className={cn("h-full w-full overflow-hidden", className)}>
       <div className="h-full overflow-hidden rounded-none border-0 bg-background">
         <div className="h-full overflow-hidden p-0">
           <div className="flex h-full min-h-0 w-full overflow-hidden flex-col lg:flex-row">
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
               {/* Unified top mode bar */}
               <ReviewModeBar
                 mode={interactionMode === "browse" ? "view" : interactionMode === "comment" ? "comment" : "draw"}
@@ -537,9 +928,42 @@ export default function PdfAnnotatorWithAnnotations({
                     <Button variant="ghost" size="sm" onClick={zoomIn} className="h-7 w-7 p-0">
                       <ZoomIn className="h-3.5 w-3.5" />
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => setScale(1)} className="h-7 px-1.5 text-xs">
+                    <Button variant="ghost" size="sm" onClick={() => zoomTo(() => 1)} className="h-7 px-1.5 text-xs">
                       <Maximize2 className="mr-1 h-3 w-3" />Fit
                     </Button>
+                  </div>
+
+                  <div className="flex items-center gap-1 rounded-md border border-white/6 bg-muted/30 px-1 py-0.5">
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label="Vertical scroll"
+                            onClick={() => setScrollMode("vertical")}
+                            className={cn("h-7 w-7 p-0", scrollMode === "vertical" && "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground")}
+                          >
+                            <Rows3 className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Vertical scroll</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            aria-label="Horizontal scroll"
+                            onClick={() => setScrollMode("horizontal")}
+                            className={cn("h-7 w-7 p-0", scrollMode === "horizontal" && "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground")}
+                          >
+                            <Columns3 className="h-3.5 w-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Horizontal scroll</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
 
                   <div className="flex items-center gap-1.5 rounded-md border border-white/6 bg-muted/30 px-2 py-1">
@@ -554,10 +978,7 @@ export default function PdfAnnotatorWithAnnotations({
                           event.stopPropagation();
                           const storagePath = asset?.storage_path;
                           if (!storagePath) return;
-                          const proxy = import.meta.env.VITE_ASSET_PUBLIC_BASE_URL || "";
-                          const base = proxy.endsWith("/") ? proxy.slice(0, -1) : proxy;
-                          const path = storagePath.startsWith("/") ? storagePath : `/${storagePath}`;
-                          void downloadFile(`${base}${path}`, asset?.title || "document");
+                          void downloadFile(pdfUrl || resolveAssetDownloadUrl(asset), asset?.title || "document", { fallbackUrl: fallbackDownloadUrl });
                         }}>
                           <Download className="h-3.5 w-3.5" />
                         </Button>
@@ -584,114 +1005,238 @@ export default function PdfAnnotatorWithAnnotations({
                       onLoadSuccess={handleDocumentLoad}
                       onLoadError={(error) => {
                         console.error("Failed to load PDF", error);
+                        if (onMediaError) {
+                          onMediaError();
+                          return;
+                        }
                         setLoadError("Failed to load PDF preview.");
                       }}
                     >
-                      <div className="mx-auto flex w-max min-w-full flex-col items-center gap-4">
+                      <div
+                        className={cn(
+                          "mx-auto flex w-max min-w-full gap-4",
+                          scrollMode === "horizontal"
+                            ? "min-h-full flex-row items-start pb-6"
+                            : "flex-col items-center"
+                        )}
+                      >
                         {Array.from({ length: numPages }, (_, index) => {
                           const pageNumber = index + 1;
                           const pageAnnotations = annotationsByPage.get(pageNumber) ?? [];
                           const pageStrokes = pageAnnotations.flatMap((annotation) => annotation.drawing ?? []);
                           const pagePins = annotationPinsByPage.get(pageNumber) ?? [];
+                          const selectedPagePin = pagePins.find((pin) => pin.id === selectedAnnotationId);
+                          const pageSize = pageSizes[pageNumber];
+                          const pageAspectRatio = pageAspectRatios[pageNumber] ?? (pageSize ? pageSize.height / pageSize.width : undefined);
+                          const pageRenderWidth = renderWidth ?? pageSize?.width ?? 100;
+                          const pageRenderHeight = pageAspectRatio ? pageRenderWidth * pageAspectRatio : pageSize?.height;
+                          const pageFrameStyle = pageRenderHeight
+                            ? {
+                              width: `${pageRenderWidth * visualScale}px`,
+                              height: `${pageRenderHeight * visualScale}px`,
+                            }
+                            : { width: `${pageRenderWidth * visualScale}px` };
+                          const pageScaleStyle = {
+                            width: `${pageRenderWidth}px`,
+                            transform: `scale(${visualScale})`,
+                            transformOrigin: "top left",
+                          };
                           return (
                             <div
                               key={pageNumber}
                               ref={(node) => {
                                 pageRefs.current[pageNumber] = node;
                               }}
-                              className="relative w-fit max-w-max overflow-hidden rounded-xl border bg-white shadow-sm"
+                              className="relative"
+                              style={pageFrameStyle}
                             >
-                              <Page
-                                pageNumber={pageNumber}
-                                width={renderWidth}
-                                renderTextLayer={false}
-                                renderAnnotationLayer={false}
-                                loading={<div className="flex h-32 items-center justify-center text-sm text-muted-foreground">Loading page {pageNumber}…</div>}
-                              />
-                              <PdfPageOverlay
-                                pageNumber={pageNumber}
-                                active={pageNumber === activePage}
-                                interactionMode={interactionMode}
-                                committedStrokes={showAnnotations ? pageStrokes : []}
-                                liveStrokes={showAnnotations && pageNumber === activePage ? liveStrokes : []}
-                                showAnnotations={showAnnotations}
-                                onActivate={setActivePage}
-                                onPointerDown={(point) => {
-                                  if (interactionMode === "comment") {
-                                    setActivePage(pageNumber);
-                                    addStroke(createAnchorStroke(point, color), true);
-                                    return;
-                                  }
-                                  pointerDown(point);
-                                }}
-                                onPointerMove={pointerMove}
-                                onPointerUp={() => {
-                                  if (interactionMode === "comment") {
-                                    setInlineComposerText("");
-                                    setInlineComposerOpen(true);
-                                    return;
-                                  }
-
-                                  const hadActiveStroke = !!activeStroke;
-                                  pointerUp();
-                                  if (!hadActiveStroke) return;
-                                  setInlineComposerText("");
-                                  setInlineComposerOpen(true);
-                                }}
-                                onPointerCancel={pointerCancel}
-                              />
-                              {showAnnotations
-                                ? pagePins.map((pin) => (
-                                  <button
-                                    key={pin.id}
-                                    type="button"
-                                    onClick={() => {
-                                      setActivePage(pageNumber);
-                                      const annotation = annotations.find((item) => item.id === pin.id);
-                                      if (!annotation) return;
-                                      scrollToPage(pageNumber);
-                                    }}
-                                    title={pin.text}
-                                    className="absolute flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-[#0b1020] text-[11px] font-semibold text-white shadow-[0_6px_18px_rgba(0,0,0,0.3)]"
-                                    style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%`, backgroundColor: pin.color }}
-                                  >
-                                    {pin.index}
-                                  </button>
-                                ))
-                                : null}
-                              {showAnnotations && interactionMode === "comment" && pageNumber === activePage && draftStrokes[0]?.points?.[0] ? (
-                                <div
-                                  className="absolute flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-[#0b1020] text-[11px] font-semibold text-white ring-4 ring-white/20 shadow-[0_6px_18px_rgba(0,0,0,0.3)]"
-                                  style={{
-                                    left: `${draftStrokes[0].points[0].x * 100}%`,
-                                    top: `${draftStrokes[0].points[0].y * 100}%`,
-                                    backgroundColor: color,
-                                  }}
-                                >
-                                  +
-                                </div>
-                              ) : null}
-                              {inlineComposerOpen && pageNumber === activePage && draftAnchorFocus ? (
-                                <div
-                                  className="absolute z-30 w-[280px] max-w-[calc(100%-24px)]"
-                                  style={{
-                                    left: `min(calc(${draftAnchorFocus.x * 100}% + 18px), calc(100% - 292px))`,
-                                    top: `max(calc(${draftAnchorFocus.y * 100}% - 12px), 16px)`,
-                                  }}
-                                >
-                                  <InlineNoteComposer
-                                    value={inlineComposerText}
-                                    onChange={setInlineComposerText}
-                                    color={color}
-                                    label={interactionMode === "comment" ? "Add note here" : "Describe your annotation"}
-                                    hint={interactionMode === "comment" ? "Pin stays attached to this page" : "Ctrl+Enter to submit"}
-                                    onCancel={() => closeInlineComposer(true)}
-                                    onSubmit={() => void handleCommentSubmit(inlineComposerText)}
+                              <div className="origin-top-left" style={pageScaleStyle}>
+                                <div className="relative w-fit max-w-max overflow-hidden rounded-xl border bg-white shadow-sm">
+                                  <Page
+                                    pageNumber={pageNumber}
+                                    width={pageRenderWidth}
+                                    renderTextLayer={false}
+                                    renderAnnotationLayer={false}
+                                    onLoadSuccess={(page) => handlePageMeasured(pageNumber, page)}
+                                    onRenderSuccess={(page) => handlePageMeasured(pageNumber, page)}
+                                    loading={<div className="flex h-32 items-center justify-center text-sm text-muted-foreground">Loading page {pageNumber}…</div>}
                                   />
+                                  <PdfPageOverlay
+                                    pageNumber={pageNumber}
+                                    active={pageNumber === activePage}
+                                    interactionMode={interactionMode}
+                                    committedStrokes={showAnnotations ? pageStrokes : []}
+                                    liveStrokes={showAnnotations && pageNumber === activePage ? liveStrokes : []}
+                                    showAnnotations={showAnnotations}
+                                    onActivate={setActivePage}
+                                    onPointerDown={(point) => {
+                                      if (interactionMode === "comment") {
+                                        setActivePage(pageNumber);
+                                        addStroke(createAnchorStroke(point, color), true);
+                                        return;
+                                      }
+                                      pointerDown(point);
+                                    }}
+                                    onPointerMove={pointerMove}
+                                    onPointerUp={() => {
+                                      if (interactionMode === "comment") {
+                                        setInlineComposerText(dockComposerText);
+                                        setInlineComposerOpen(true);
+                                        return;
+                                      }
+
+                                      const hadActiveStroke = !!activeStroke;
+                                      pointerUp();
+                                      if (!hadActiveStroke) return;
+                                      setInlineComposerText(dockComposerText);
+                                      setInlineComposerOpen(true);
+                                    }}
+                                    onPointerCancel={pointerCancel}
+                                  />
+                                  {showAnnotations
+                                    ? pagePins.map((pin) => {
+                                      const pinFocus = resolveFocus(pin.id, pin);
+                                      const isDragging = draggingId === pin.id;
+                                      const pageWidthPx = pageRenderWidth * visualScale;
+                                      const pageHeightPx = (pageRenderHeight ?? 0) * visualScale;
+                                      return (
+                                        <button
+                                          key={pin.id}
+                                          type="button"
+                                          data-review-ui="true"
+                                          title={pin.text ? `${convertMentionsForDisplay(pin.text)} (drag to move)` : "Drag to move this pin"}
+                                          className={cn(
+                                            "group absolute z-30 touch-none transition-transform",
+                                            isDragging ? "cursor-grabbing" : "cursor-grab",
+                                            selectedAnnotationId === pin.id ? "z-40" : "hover:z-40"
+                                          )}
+                                          style={getScaledPagePointStyle(pinFocus, visualScale, PDF_PIN_SIZE)}
+                                          onPointerDown={(e) => beginDrag(pin.id, pin, e)}
+                                          onPointerMove={(e) => updateDrag(e, pageWidthPx, pageHeightPx)}
+                                          onPointerUp={(e) => {
+                                            e.stopPropagation();
+                                            const wasDrag = endDrag(e);
+                                            if (!wasDrag) {
+                                              setActivePage(pageNumber);
+                                              setCurrentPage(pageNumber);
+                                              setSelectedAnnotationId(pin.id);
+                                            }
+                                          }}
+                                        >
+                                          <BubblePin
+                                            initials={pin.displayName ? getAvatarInitials(pin.displayName) : ""}
+                                            userId={pin.annotation.authorId}
+                                            userName={pin.displayName}
+                                            className={pin.displayName ? undefined : "animate-pulse"}
+                                            size={PDF_PIN_SIZE}
+                                          />
+                                          <span className="pointer-events-none absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-white/40 bg-slate-900/90 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                                            <Move className="h-2.5 w-2.5" />
+                                          </span>
+                                        </button>
+                                      );
+                                    })
+                                    : null}
+                                  {showAnnotations && interactionMode === "comment" && pageNumber === activePage && resolvedDraftAnchorFocus ? (
+                                    <button
+                                      type="button"
+                                      data-review-ui="true"
+                                      title="Drag to move this pin"
+                                      className={cn(
+                                        "group absolute flex h-7 w-7 touch-none items-center justify-center rounded-full border-2 border-[#0b1020] text-[11px] font-semibold text-white ring-4 ring-white/20 shadow-[0_6px_18px_rgba(0,0,0,0.3)]",
+                                        draggingId === DRAFT_PIN_ID ? "cursor-grabbing" : "cursor-grab"
+                                      )}
+                                      style={{
+                                        ...getScaledPagePointStyle(resolvedDraftAnchorFocus, visualScale, PDF_DRAFT_PIN_SIZE),
+                                        backgroundColor: color,
+                                      }}
+                                      onPointerDown={(e) => beginDrag(DRAFT_PIN_ID, resolvedDraftAnchorFocus, e)}
+                                      onPointerMove={(e) => updateDrag(
+                                        e,
+                                        pageRenderWidth * visualScale,
+                                        (pageRenderHeight ?? 0) * visualScale
+                                      )}
+                                      onPointerUp={(e) => {
+                                        e.stopPropagation();
+                                        endDrag(e);
+                                      }}
+                                    >
+                                      +
+                                      <span className="pointer-events-none absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-white/40 bg-slate-900/90 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                                        <Move className="h-2.5 w-2.5" />
+                                      </span>
+                                    </button>
+                                  ) : null}
+                                  {showAnnotations && selectedPagePin ? (
+                                    <div
+                                      className="absolute z-50"
+                                      data-review-ui="true"
+                                      style={getScaledCommentPopoverStyle(
+                                        resolveFocus(selectedPagePin.id, selectedPagePin),
+                                        visualScale,
+                                        pageRenderWidth * visualScale
+                                      )}
+                                    >
+                                      <CommentPopover
+                                        author={selectedPagePin.displayName ?? "User"}
+                                        authorId={selectedPagePin.annotation.authorId}
+                                        text={selectedPagePin.annotation.text || ""}
+                                        createdAt={selectedPagePin.annotation.createdAt}
+                                        isCompleted={selectedPagePin.annotation.isCompleted}
+                                        onClose={() => setSelectedAnnotationId(null)}
+                                        onDelete={!commentMutationContext?.share_token || selectedPagePin.annotation.canManageComment ? () => void handleDeleteComment(selectedPagePin.id) : undefined}
+                                        onComplete={canCompleteComments ? () => void handleToggleCompleted(selectedPagePin.id) : undefined}
+                                        className="max-h-[320px] overflow-y-auto"
+                                        isDragging={draggingId === selectedPagePin.id}
+                                        onDragHandlePointerDown={(e) => beginDrag(selectedPagePin.id, selectedPagePin, e)}
+                                        onDragHandlePointerMove={(e) => updateDrag(
+                                          e,
+                                          pageRenderWidth * visualScale,
+                                          (pageRenderHeight ?? 0) * visualScale
+                                        )}
+                                        onDragHandlePointerUp={(e) => endDrag(e)}
+                                      />
+                                    </div>
+                                  ) : null}
+                                  {inlineComposerOpen && pageNumber === activePage && resolvedDraftAnchorFocus ? (
+                                    <div
+                                      className="absolute z-50 max-w-[calc(100%-24px)]"
+                                      style={getScaledInlineComposerStyle(
+                                        resolvedDraftAnchorFocus,
+                                        visualScale,
+                                        pageRenderWidth * visualScale
+                                      )}
+                                    >
+                                      <InlineNoteComposer
+                                        value={inlineComposerText}
+                                        onChange={(value) => {
+                                          setInlineComposerText(value);
+                                          setDockComposerText(value);
+                                        }}
+                                        color={color}
+                                        label={interactionMode === "comment" ? "Add note here" : "Describe your annotation"}
+                                        hint={interactionMode === "comment" ? "Pin stays attached to this page" : "Ctrl+Enter to submit"}
+                                        projectId={projectId}
+                                        organizationId={organizationId}
+                                        workspaceId={workspaceId}
+                                        assetId={assetId}
+                                        onCancel={() => closeInlineComposer(true)}
+                                        onSubmit={() => void handleCommentSubmit(inlineComposerText)}
+                                        isDragging={draggingId === DRAFT_PIN_ID}
+                                        onDragHandlePointerDown={(e) => beginDrag(DRAFT_PIN_ID, resolvedDraftAnchorFocus, e)}
+                                        onDragHandlePointerMove={(e) => updateDrag(
+                                          e,
+                                          pageRenderWidth * visualScale,
+                                          (pageRenderHeight ?? 0) * visualScale
+                                        )}
+                                        onDragHandlePointerUp={(e) => endDrag(e)}
+                                      />
+                                    </div>
+                                  ) : null}
+                                  <div className="absolute left-3 top-3 rounded-full bg-black/70 px-2 py-1 text-[11px] font-medium text-white">
+                                    Page {pageNumber}
+                                  </div>
                                 </div>
-                              ) : null}
-                              <div className="absolute left-3 top-3 rounded-full bg-black/70 px-2 py-1 text-[11px] font-medium text-white">
-                                Page {pageNumber}
                               </div>
                             </div>
                           );
@@ -706,87 +1251,103 @@ export default function PdfAnnotatorWithAnnotations({
                     <div className="pointer-events-none absolute bottom-4 right-4 rounded-full border border-white/10 bg-[#101629]/92 px-2 py-1 text-[10px] font-medium text-white/80 shadow-[0_8px_30px_rgba(0,0,0,0.28)] z-10">
                       {Math.round(scrollMetrics.progress * 100)}%
                     </div>
-                    <div className="pointer-events-none absolute right-2 top-4 bottom-14 flex w-3 items-center z-10">
-                      <div className="relative h-full w-full rounded-full border border-white/8 bg-[#101629]/88 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                        <div
-                          className="absolute left-[2px] right-[2px] rounded-full bg-gradient-to-b from-sky-300 via-cyan-400 to-sky-500 shadow-[0_0_12px_rgba(34,211,238,0.35)]"
-                          style={{
-                            top: `${scrollMetrics.thumbTopPercent}%`,
-                            height: `${scrollMetrics.thumbHeightPercent}%`,
-                          }}
-                        />
+                    {scrollMode === "horizontal" ? (
+                      <div
+                        className="pointer-events-auto absolute bottom-5 left-4 right-16 flex h-3 cursor-pointer items-center z-10"
+                        onPointerDown={handleScrollbarPointerDown("horizontal")}
+                      >
+                        <div className="relative h-full w-full rounded-full border border-white/8 bg-[#101629]/88 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                          <div
+                            className="absolute bottom-[2px] top-[2px] rounded-full bg-gradient-to-r from-sky-300 via-cyan-400 to-sky-500 shadow-[0_0_12px_rgba(34,211,238,0.35)]"
+                            style={{
+                              left: `${scrollMetrics.thumbTopPercent}%`,
+                              width: `${scrollMetrics.thumbHeightPercent}%`,
+                            }}
+                          />
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div
+                        className="pointer-events-auto absolute right-2 top-4 bottom-14 flex w-3 cursor-pointer items-center z-10"
+                        onPointerDown={handleScrollbarPointerDown("vertical")}
+                      >
+                        <div className="relative h-full w-full rounded-full border border-white/8 bg-[#101629]/88 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                          <div
+                            className="absolute left-[2px] right-[2px] rounded-full bg-gradient-to-b from-sky-300 via-cyan-400 to-sky-500 shadow-[0_0_12px_rgba(34,211,238,0.35)]"
+                            style={{
+                              top: `${scrollMetrics.thumbTopPercent}%`,
+                              height: `${scrollMetrics.thumbHeightPercent}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
                   </>
                 ) : null}
               </div>
             </div>
 
-            <div className="flex min-h-0 w-full flex-col overflow-hidden lg:w-[400px] lg:flex-none">
-              <div className="h-full min-h-0">
-                <CommentsPanel
-                  className="lg:w-full lg:min-w-0 lg:max-w-none"
-                  items={filteredAnnotations.map((annotation) => ({
-                    id: annotation.id,
-                    author: annotation.author,
-                    authorId: annotation.authorId,
-                    text: annotation.page ? `Page ${annotation.page} · ${annotation.text}` : annotation.text,
-                    emoji: annotation.emoji,
-                    hasDrawing: !!(annotation.drawing && annotation.drawing.length > 0),
-                    isCompleted: annotation.isCompleted,
-                    isDeleted: annotation.isDeleted,
-                    createdAt: annotation.createdAt,
-                  }))}
-                  onItemClick={(id) => {
-                    const annotation = annotations.find((item) => item.id === id);
-                    if (!annotation?.page) return;
-                    scrollToPage(annotation.page);
-                  }}
-                  showCommentDock={true}
-                  includeTimestamp={false}
-                  annotating={interactionMode !== "browse"}
-                  onToggleAnnotating={() => setInteractionMode((mode) => (mode === "browse" ? "draw" : "browse"))}
-                  tool={tool}
-                  onToolChange={setTool}
-                  color={color}
-                  onColorChange={setColor}
-                  canUndo={!!draftStrokes.length || !!activeStroke}
-                  onUndo={undoStroke}
-                  onClear={clearStrokes}
-                  onCommentSubmit={handleCommentSubmit}
-                  onEditComment={async (id: string, newText: string) => {
-                    setAnnotations((prev) => prev.map((item) => (item.id === id ? { ...item, text: newText } : item)));
-                    await invokeEdgeFunction("comment", {
-                      method: "PATCH",
-                      body: { id, body: newText },
-                    });
-                  }}
-                  onDeleteComment={async (id: string) => {
-                    setAnnotations((prev) => prev.map((item) => (item.id === id ? { ...item, isDeleted: true } : item)));
-                    await invokeEdgeFunction("comment", {
-                      method: "PATCH",
-                      body: { id, status: "deleted" },
-                    });
-                  }}
-                  onToggleCompleted={async (id: string) => {
-                    setAnnotations((prev) =>
-                      prev.map((item) => (item.id === id ? { ...item, isCompleted: !item.isCompleted } : item))
-                    );
-                    await invokeEdgeFunction("comment", {
-                      method: "PATCH",
-                      body: { id, status: "completed" },
-                    });
-                  }}
-                  projectId={projectId}
-                  organizationId={organizationId}
-                  workspaceId={workspaceId}
-                  assetId={assetId}
-                  asset={asset}
-                  onAssetMetadataSave={onAssetMetadataSave}
-                  profiles={profiles}
-                />
+            {panelOpen ? (
+              <div className="flex min-h-0 w-full flex-col overflow-hidden lg:w-[400px] lg:flex-none">
+                <div className="h-full min-h-0">
+                  <CommentsPanel
+                    className="lg:w-full lg:min-w-0 lg:max-w-none"
+                    items={filteredAnnotations.map((annotation) => ({
+                      id: annotation.id,
+                      author: getPdfAnnotationAuthorName(annotation, profiles) ?? "User",
+                      authorId: annotation.authorId,
+                      text: annotation.text,
+                      page: hasPdfPageAnchor(annotation) ? annotation.page : undefined,
+                      emoji: annotation.emoji,
+                      hasDrawing: !!(annotation.drawing && annotation.drawing.length > 0),
+                      isCompleted: annotation.isCompleted,
+                      isDeleted: annotation.isDeleted,
+                      canManageComment: annotation.canManageComment,
+                      canDeleteComment: annotation.canDeleteComment,
+                      createdAt: annotation.createdAt,
+                    }))}
+                    onItemClick={(id) => {
+                      const annotation = annotations.find((item) => item.id === id);
+                      setSelectedAnnotationId(id);
+                      if (!annotation?.page || !hasPdfPageAnchor(annotation)) return;
+                      scrollToPage(annotation.page);
+                    }}
+                    showCommentDock={true}
+                    includeTimestamp={false}
+                    annotating={interactionMode !== "browse"}
+                    onToggleAnnotating={() => setInteractionMode((mode) => (mode === "browse" ? "draw" : "browse"))}
+                    reviewMode={interactionMode === "browse" ? "view" : interactionMode}
+                    onReviewModeChange={(mode) => {
+                      if (mode === "view") setBrowseMode();
+                      else if (mode === "comment") setCommentMode();
+                      else setDrawTool(tool || "pen");
+                    }}
+                    tool={tool}
+                    onToolChange={setTool}
+                    color={color}
+                    onColorChange={setColor}
+                    canUndo={!!draftStrokes.length || !!activeStroke}
+                    onUndo={undoStroke}
+                    onClear={clearStrokes}
+                    onCommentSubmit={handleCommentSubmit}
+                    commentValue={dockComposerText}
+                    onCommentChange={setDockComposerText}
+                    onEditComment={handleEditComment}
+                    onDeleteComment={handleDeleteComment}
+                    onToggleCompleted={canCompleteComments ? handleToggleCompleted : undefined}
+                    projectId={projectId}
+                    organizationId={organizationId}
+                    workspaceId={workspaceId}
+                    assetId={assetId}
+                    asset={asset}
+                    onAssetMetadataSave={onAssetMetadataSave}
+                    onRetagAsset={onRetagAsset}
+                    retagStatus={retagStatus}
+                    profiles={profiles}
+                  />
+                </div>
               </div>
-            </div>
+            ) : null}
           </div>
         </div>
       </div>

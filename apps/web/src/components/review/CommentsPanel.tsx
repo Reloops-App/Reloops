@@ -1,13 +1,14 @@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Pen } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getAvatarInitials, AVATAR_FALLBACK_CLASS } from "@/lib/avatar-utils";
-import { DotSep, EmojiPill } from "../video-player/emoji";
-import { useEffect, useState, useRef, useMemo } from "react";
+import { getAvatarInitials, AVATAR_FALLBACK_CLASS, getUserAvatarColor } from "@/lib/avatar-utils";
+import { EmojiPill } from "../video-player/emoji";
+import { useEffect, useState, useRef, useMemo, type ChangeEvent, type ElementType, type ReactNode } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Badge } from "@/components/ui/badge";
 import { RoleBadge, type UserRole } from "@/components/ui/role-badge";
@@ -16,14 +17,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { SimpleMentionTextareaFinal } from "../ui/simple-mention-textarea-final";
-import BottomCommentDock from "./shared/BottomCommentDock";
+import BottomCommentDock, { type CommentDockMode } from "./shared/BottomCommentDock";
 import type { Tool } from "./annotator-utils";
 import { invokeEdgeFunction } from "@/api/edge";
 import { AnimatePresence, motion } from "framer-motion";
 
-import { Minus, AlertTriangle, RotateCcw, Check, Calendar, FileText, HardDrive, Edit2, Trash2, CheckCircle2, MessageSquare, History, Upload, UserRound, Tag, Layers, CircleDot, FolderOpen, Plus, X, Save, Sparkles, Loader2, ChevronDown } from "lucide-react";
+import { Minus, AlertTriangle, RotateCcw, Check, FileText, HardDrive, Edit2, Trash2, CheckCircle2, MessageSquare, History, Upload, UserRound, Tag, Layers, CircleDot, FolderOpen, Plus, X, Save, Sparkles, Loader2, ChevronDown, PanelRightClose, Info } from "lucide-react";
 import { formatTimetoDayMonth } from "@/lib/utils";
-import { Card } from "../ui/card";
+import { getRawFormatLabel } from "@/lib/designFiles";
+import { describeRawCamera, rawPreviewFromAiMetadata } from "@/lib/rawPreview";
 import { apiKeyActorProfileId, loadApiKeyActorProfiles } from "@/lib/api-key-actors";
 
 type AssetProjectLocation = {
@@ -37,6 +39,71 @@ type AssetMetadataPatch = {
   description: string | null;
   tags: string[];
 };
+
+const FIELD_HELPER_CLASS_NAME = "text-[12.5px] leading-5 text-sidebar-foreground/68";
+
+function InfoSection({
+  title,
+  description,
+  icon: Icon,
+  children,
+  defaultOpen = true,
+  badge,
+  tone = "neutral",
+}: {
+  title: string;
+  description?: string;
+  icon: ElementType;
+  children: ReactNode;
+  defaultOpen?: boolean;
+  badge?: ReactNode;
+  tone?: "neutral" | "custom" | "smart";
+}) {
+  return (
+    <Collapsible
+      defaultOpen={defaultOpen}
+      className={cn(
+        "overflow-hidden rounded-lg border shadow-sm",
+        tone === "custom" && "border-sky-400/16 bg-[linear-gradient(180deg,var(--card)_0%,rgba(14,165,233,0.055)_100%)]",
+        tone === "smart" && "border-violet-300/24 bg-[linear-gradient(180deg,rgba(139,92,246,0.14)_0%,rgba(6,182,212,0.055)_52%,var(--card)_100%)] shadow-[0_18px_45px_rgba(88,28,135,0.16)]",
+        tone === "neutral" && "border-sidebar-border/55 bg-card/95"
+      )}
+    >
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          className="group flex w-full items-start justify-between gap-3 px-4 py-3.5 text-left transition hover:bg-sidebar-accent/18"
+        >
+          <div className="flex min-w-0 items-start gap-2">
+            <div className={cn(
+              "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border",
+              tone === "custom" && "border-sky-400/20 bg-sky-400/10 text-sky-700 dark:text-sky-100",
+              tone === "smart" && "border-cyan-200/18 bg-[linear-gradient(135deg,rgba(34,211,238,0.14),rgba(148,163,184,0.08))] text-cyan-700 dark:text-cyan-50 shadow-[0_0_14px_rgba(34,211,238,0.10)]",
+              tone === "neutral" && "border-sidebar-border/45 bg-background/70 text-sidebar-foreground"
+            )}>
+              <Icon className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-[15px] font-semibold leading-5 text-sidebar-foreground">{title}</div>
+              {description ? (
+                <div className={cn("mt-0.5", FIELD_HELPER_CLASS_NAME)}>{description}</div>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {badge}
+            <ChevronDown className="h-4 w-4 text-sidebar-foreground/45 transition-transform group-data-[state=open]:rotate-180" />
+          </div>
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="border-t border-sidebar-border/35 px-4 py-4">
+          {children}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
 
 function normalizeManualTags(tags: unknown[]) {
   const seen = new Set<string>();
@@ -97,6 +164,8 @@ function AssetFields({
   projectLocations,
   loadingProjectLocations,
   onAssetMetadataSave,
+  onRetagAsset,
+  retagStatus,
 }: {
   asset?: {
     id: string;
@@ -105,11 +174,15 @@ function AssetFields({
     tags?: string[] | null;
     smart_tags?: string[] | null;
     smart_description?: string | null;
+    smart_metadata_provider?: string | null;
+    ai_metadata?: { provider?: string | null; [key: string]: unknown } | null;
     project_id?: string | null;
     parent_asset_id?: string | null;
     status?: string | null;
     assigned_to?: string | null;
     uploaded_by?: string | null;
+    uploaded_by_guest_name?: string | null;
+    uploaded_by_guest_email?: string | null;
     created_at: string;
     updated_at?: string | null;
     uploaded_at?: string;
@@ -129,6 +202,8 @@ function AssetFields({
   projectLocations: AssetProjectLocation[];
   loadingProjectLocations: boolean;
   onAssetMetadataSave?: (patch: AssetMetadataPatch) => Promise<void> | void;
+  onRetagAsset?: () => void;
+  retagStatus?: "idle" | "queued" | "error";
 }) {
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [tagDrafts, setTagDrafts] = useState<string[]>([]);
@@ -136,13 +211,40 @@ function AssetFields({
   const [metadataSaving, setMetadataSaving] = useState(false);
   const [metadataError, setMetadataError] = useState<string | null>(null);
   const [lastMetadataSavedAt, setLastMetadataSavedAt] = useState<Date | null>(null);
+  const descriptionInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const tagInputRef = useRef<HTMLInputElement | null>(null);
+  const persistedTagSignature = useMemo(
+    () => normalizeManualTags(asset?.tags ?? []).join("\n"),
+    [asset?.tags]
+  );
+  const persistedTags = useMemo(
+    () => persistedTagSignature ? persistedTagSignature.split("\n") : [],
+    [persistedTagSignature]
+  );
+  const pendingInputTags = useMemo(() => splitTagInput(tagInput), [tagInput]);
+  const tagSuggestions = useMemo(() => {
+    const inputKey = tagInput.trim().toLocaleLowerCase();
+    const selected = new Set(tagDrafts.map((tag) => tag.trim().toLocaleLowerCase()));
+    const candidates = normalizeManualTags([
+      ...(asset?.smart_tags ?? []),
+      ...persistedTags,
+    ]);
+
+    return candidates
+      .filter((tag) => !selected.has(tag.trim().toLocaleLowerCase()))
+      .filter((tag) => {
+        if (!inputKey) return true;
+        return tag.toLocaleLowerCase().includes(inputKey);
+      })
+      .slice(0, 8);
+  }, [asset?.smart_tags, persistedTags, tagDrafts, tagInput]);
 
   useEffect(() => {
     setDescriptionDraft(asset?.description ?? "");
-    setTagDrafts(normalizeManualTags(asset?.tags ?? []));
+    setTagDrafts(persistedTagSignature ? persistedTagSignature.split("\n") : []);
     setTagInput("");
     setMetadataError(null);
-  }, [asset?.id, asset?.description, asset?.tags]);
+  }, [asset?.id, asset?.description, persistedTagSignature]);
 
   if (!asset) {
     return (
@@ -180,6 +282,10 @@ function AssetFields({
     const type = mimeType.split('/')[1]?.toUpperCase() || mimeType.toUpperCase();
     return type;
   };
+
+  // Camera RAW shows its real format ("CR2 (RAW)") rather than the mime subtype ("X-CANON-CR2" / "OCTET-STREAM").
+  const getFormatDisplay = () => getRawFormatLabel(asset) ?? getMimeTypeDisplay(asset.mime_type);
+  const rawCameraRows = describeRawCamera(rawPreviewFromAiMetadata(asset.ai_metadata)?.exif);
 
   const formatDuration = (durationMs?: number | null) => {
     if (!durationMs) return "N/A";
@@ -234,20 +340,43 @@ function AssetFields({
 
   const assignedProfile = asset.assigned_to ? profiles[asset.assigned_to] : null;
   const uploaderProfile = asset.uploaded_by ? profiles[asset.uploaded_by] : null;
-  const persistedTags = normalizeManualTags(asset.tags ?? []);
+  const draftTagsWithPendingInput = normalizeManualTags([...tagDrafts, ...pendingInputTags]);
   const isMetadataDirty =
     descriptionDraft.trim() !== (asset.description ?? "").trim() ||
-    tagDrafts.join("\n") !== persistedTags.join("\n");
+    draftTagsWithPendingInput.join("\n") !== persistedTagSignature;
 
   const addTags = (rawTags: string[]) => {
     setTagDrafts((current) => normalizeManualTags([...current, ...rawTags]));
   };
 
-  const commitTagInput = () => {
+  const restoreDescriptionFocus = (selectionStart: number, selectionEnd: number) => {
+    window.requestAnimationFrame(() => {
+      const input = descriptionInputRef.current;
+      if (!input) return;
+      const max = input.value.length;
+      input.focus();
+      input.setSelectionRange(Math.min(selectionStart, max), Math.min(selectionEnd, max));
+    });
+  };
+
+  const handleDescriptionChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    const nextValue = event.currentTarget.value.slice(0, 800);
+    const selectionStart = Math.min(event.currentTarget.selectionStart ?? nextValue.length, nextValue.length);
+    const selectionEnd = Math.min(event.currentTarget.selectionEnd ?? nextValue.length, nextValue.length);
+    setDescriptionDraft(nextValue);
+    restoreDescriptionFocus(selectionStart, selectionEnd);
+  };
+
+  const focusTagInput = () => {
+    window.requestAnimationFrame(() => tagInputRef.current?.focus());
+  };
+
+  const commitTagInput = ({ refocus = false }: { refocus?: boolean } = {}) => {
     const next = splitTagInput(tagInput);
     if (next.length === 0) return;
     addTags(next);
     setTagInput("");
+    if (refocus) focusTagInput();
   };
 
   const removeTag = (tag: string) => {
@@ -261,6 +390,12 @@ function AssetFields({
 
   const addSmartTag = (tag: string) => {
     addTags([tag]);
+  };
+
+  const addSuggestedTag = (tag: string) => {
+    addTags([tag]);
+    setTagInput("");
+    focusTagInput();
   };
 
   const resetMetadataDraft = () => {
@@ -278,8 +413,9 @@ function AssetFields({
     try {
       await onAssetMetadataSave({
         description: descriptionDraft.trim() || null,
-        tags: normalizeManualTags(tagDrafts),
+        tags: draftTagsWithPendingInput,
       });
+      setTagDrafts(draftTagsWithPendingInput);
       setTagInput("");
       setLastMetadataSavedAt(new Date());
     } catch (error) {
@@ -289,11 +425,22 @@ function AssetFields({
       setMetadataSaving(false);
     }
   };
+
   const smartDescription = smartDescriptionLines(asset.smart_description);
+  const hasSmartDescription = Boolean(asset.smart_description && asset.smart_description.trim().length > 0);
+  const hasSmartTags = Array.isArray(asset.smart_tags) && asset.smart_tags.length > 0;
+  // `smart_metadata_provider` reflects the retag-poll-refreshed value (see
+  // ReviewAsset.tsx handleRetagAsset); `ai_metadata?.provider` covers the
+  // initial direct-query load, which never populates smart_metadata_provider.
+  // The mock fallback (worker's ASSET_AI_PROVIDER=mock, or an image OpenAI's
+  // vision endpoint can't decode) still fills both fields above with
+  // low-quality filename-derived text, so presence alone can't distinguish
+  // it from a real AI pass -- this is what unhides the CTA below for assets
+  // that technically already "have" a description/tags.
+  const isMockSmartMetadata = (asset.smart_metadata_provider ?? asset.ai_metadata?.provider) === "mock";
   const rowClassName = "flex items-center justify-between gap-4 rounded-md px-2.5 py-2 transition hover:bg-sidebar-accent/18";
   const labelClassName = "text-[13px] font-semibold text-sidebar-foreground/82";
   const valueClassName = "min-w-0 text-right text-[13.5px] font-semibold text-sidebar-foreground";
-  const helperClassName = "text-[12.5px] leading-5 text-sidebar-foreground/68";
   const metadataStateLabel = metadataSaving
     ? "Saving changes"
     : metadataError
@@ -303,71 +450,14 @@ function AssetFields({
         : lastMetadataSavedAt
           ? `Saved ${lastMetadataSavedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
           : "No unsaved changes";
-
-  const InfoSection = ({
-    title,
-    description,
-    icon: Icon,
-    children,
-    defaultOpen = true,
-    badge,
-    tone = "neutral",
-  }: {
-    title: string;
-    description?: string;
-    icon: React.ElementType;
-    children: React.ReactNode;
-    defaultOpen?: boolean;
-    badge?: React.ReactNode;
-    tone?: "neutral" | "custom" | "smart";
-  }) => (
-    <Collapsible
-      defaultOpen={defaultOpen}
-      className={cn(
-        "overflow-hidden rounded-lg border shadow-sm",
-        tone === "custom" && "border-sky-400/16 bg-[linear-gradient(180deg,hsl(var(--card))_0%,rgba(14,165,233,0.055)_100%)]",
-        tone === "smart" && "border-violet-300/24 bg-[linear-gradient(180deg,rgba(139,92,246,0.14)_0%,rgba(6,182,212,0.055)_52%,hsl(var(--card))_100%)] shadow-[0_18px_45px_rgba(88,28,135,0.16)]",
-        tone === "neutral" && "border-sidebar-border/55 bg-card/95"
-      )}
-    >
-      <CollapsibleTrigger asChild>
-        <button
-          type="button"
-          className="group flex w-full items-start justify-between gap-3 px-4 py-3.5 text-left transition hover:bg-sidebar-accent/18"
-        >
-          <div className="flex min-w-0 items-start gap-2">
-            <div className={cn(
-              "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border",
-              tone === "custom" && "border-sky-400/20 bg-sky-400/10 text-sky-100",
-              tone === "smart" && "border-violet-300/28 bg-[linear-gradient(135deg,rgba(167,139,250,0.24),rgba(34,211,238,0.10))] text-violet-50 shadow-[0_0_18px_rgba(139,92,246,0.18)]",
-              tone === "neutral" && "border-sidebar-border/45 bg-background/70 text-sidebar-foreground"
-            )}>
-              <Icon className="h-4 w-4" />
-            </div>
-            <div className="min-w-0">
-              <div className="text-[15px] font-semibold leading-5 text-sidebar-foreground">{title}</div>
-              {description ? (
-                <div className={cn("mt-0.5", helperClassName)}>{description}</div>
-              ) : null}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {badge}
-            <ChevronDown className="h-4 w-4 text-sidebar-foreground/45 transition-transform group-data-[state=open]:rotate-180" />
-          </div>
-        </button>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="border-t border-sidebar-border/35 px-4 py-4">
-          {children}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  );
+  const tagMenuEnabled = pendingInputTags.length > 0 || tagSuggestions.length > 0;
+  const pendingTagLabel = pendingInputTags.length === 1
+    ? `Add "${displayTagLabel(pendingInputTags[0])}"`
+    : `Add ${pendingInputTags.length} tags`;
 
   return (
     <div className="relative min-h-full">
-      <div className="space-y-4 bg-[radial-gradient(circle_at_top,hsl(var(--sidebar-accent)/0.22),transparent_260px)] px-3 py-3 pb-28">
+      <div className="space-y-4 bg-[radial-gradient(circle_at_top,color-mix(in_oklch,var(--sidebar-accent)_22%,transparent),transparent_260px)] px-3 py-3 pb-28">
       <InfoSection
         title="Custom Metadata"
         description="Editable team metadata."
@@ -388,7 +478,7 @@ function AssetFields({
               <div>
                 <div className="text-[13px] font-semibold text-sidebar-foreground">Manual fields</div>
               </div>
-              <Badge variant="outline" className="h-6 border-sky-400/20 px-2 text-[11px] text-sky-100/80">
+              <Badge variant="outline" className="h-6 border-sky-400/20 px-2 text-[11px] text-sky-700 dark:text-sky-100/80">
                 Editable
               </Badge>
             </div>
@@ -399,8 +489,9 @@ function AssetFields({
               </span>
             </div>
             <Textarea
+              ref={descriptionInputRef}
               value={descriptionDraft}
-              onChange={(event) => setDescriptionDraft(event.target.value.slice(0, 800))}
+              onChange={handleDescriptionChange}
               placeholder="Describe campaign, product, usage rights, region, audience, or review context."
               className="mt-2 min-h-[124px] resize-none rounded-md border-sky-400/14 bg-background/95 px-3 py-2.5 text-[13.5px] leading-6 text-sidebar-foreground shadow-sm transition placeholder:text-sidebar-foreground/45 focus-visible:border-sky-300/45 focus-visible:ring-2 focus-visible:ring-sky-400/15"
             />
@@ -425,7 +516,7 @@ function AssetFields({
                         exit={{ opacity: 0, y: -2, scale: 0.98 }}
                         className="inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-md border border-sky-400/14 bg-sky-400/10 px-3 py-1 text-[12.5px] font-semibold text-sidebar-foreground shadow-[0_1px_0_rgba(0,0,0,0.04)]"
                       >
-                        <span className="truncate">{displayTagLabel(tag)}</span>
+                        <span className="truncate" title={displayTagLabel(tag)}>{displayTagLabel(tag)}</span>
                         <button
                           type="button"
                           onClick={() => removeTag(tag)}
@@ -446,13 +537,13 @@ function AssetFields({
 
               <div className="flex border-t border-sidebar-border/45 bg-sidebar-accent/8">
                 <Input
+                  ref={tagInputRef}
                   value={tagInput}
                   onChange={(event) => setTagInput(event.target.value)}
-                  onBlur={commitTagInput}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === ",") {
                       event.preventDefault();
-                      commitTagInput();
+                      commitTagInput({ refocus: true });
                     }
                     if (event.key === "Backspace" && !tagInput && tagDrafts.length > 0) {
                       event.preventDefault();
@@ -462,24 +553,54 @@ function AssetFields({
                   placeholder="Type your tag and press Enter"
                   className="h-10 min-w-0 flex-1 rounded-none border-0 bg-transparent px-2.5 text-[13.5px] shadow-none placeholder:text-sidebar-foreground/48 focus-visible:ring-0"
                 />
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-10 w-10 shrink-0 rounded-none border-l border-sidebar-border/45 text-sidebar-foreground/80 hover:bg-sky-400/10 hover:text-sidebar-foreground"
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={commitTagInput}
-                        disabled={!tagInput.trim()}
+                <DropdownMenu>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-10 w-10 shrink-0 rounded-none border-l border-sidebar-border/45 text-sidebar-foreground/80 hover:bg-sky-400/10 hover:text-sidebar-foreground"
+                            disabled={!tagMenuEnabled}
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent>Add or reuse tag</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  <DropdownMenuContent align="end" className="w-64 border-sidebar-border bg-background">
+                    {pendingInputTags.length > 0 ? (
+                      <DropdownMenuItem
+                        className="cursor-pointer gap-2 text-[13px]"
+                        onSelect={() => {
+                          commitTagInput({ refocus: true });
+                        }}
                       >
                         <Plus className="h-3.5 w-3.5" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Add tag</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                        <span className="truncate">{pendingTagLabel}</span>
+                      </DropdownMenuItem>
+                    ) : null}
+                    {pendingInputTags.length > 0 && tagSuggestions.length > 0 ? (
+                      <DropdownMenuSeparator />
+                    ) : null}
+                    {tagSuggestions.map((tag) => (
+                      <DropdownMenuItem
+                        key={tag}
+                        className="cursor-pointer gap-2 text-[13px]"
+                        onSelect={() => {
+                          addSuggestedTag(tag);
+                        }}
+                      >
+                        <Tag className="h-3.5 w-3.5 text-sidebar-foreground/58" />
+                        <span className="truncate">{displayTagLabel(tag)}</span>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
           </div>
@@ -500,35 +621,82 @@ function AssetFields({
         tone="smart"
       >
         <div className="space-y-5">
-          <div className="relative overflow-hidden rounded-lg border border-violet-300/26 bg-[linear-gradient(180deg,rgba(139,92,246,0.12),rgba(6,182,212,0.055))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-violet-200/50 to-transparent" />
+          {onRetagAsset && (!hasSmartDescription || !hasSmartTags || isMockSmartMetadata) ? (
+            <div className="relative overflow-hidden rounded-lg border border-cyan-600/25 bg-cyan-50 dark:border-cyan-100/16 dark:bg-transparent dark:bg-[linear-gradient(180deg,rgba(34,211,238,0.09),rgba(15,23,42,0.16))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-600/30 dark:via-cyan-100/28 to-transparent" />
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-cyan-600/25 bg-cyan-500/10 text-cyan-700 dark:border-cyan-100/16 dark:bg-cyan-100/8 dark:text-cyan-100/90">
+                  <Sparkles className="h-3.5 w-3.5" />
+                </span>
+                <div className="truncate text-[13.5px] font-semibold text-sidebar-foreground">
+                  {retagStatus === "queued"
+                    ? "Generating…"
+                    : isMockSmartMetadata
+                      ? "Only basic details detected"
+                      : "No description or tags yet"}
+                </div>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                className="mt-3 w-full gap-1.5 text-[12.5px] font-semibold"
+                onClick={onRetagAsset}
+                disabled={retagStatus === "queued"}
+              >
+                {retagStatus === "queued" ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5" />
+                )}
+                {retagStatus === "queued" ? "Generating…" : "Generate with AI"}
+              </Button>
+            </div>
+          ) : null}
+
+          <div className="relative overflow-hidden rounded-lg border border-cyan-600/20 bg-cyan-50/70 dark:border-white/[0.055] dark:bg-transparent dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.075),rgba(34,211,238,0.045))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-600/25 dark:via-cyan-100/22 to-transparent" />
             <div className="mb-2 flex items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-2">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-violet-300/24 bg-violet-300/12 text-violet-100">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-cyan-600/25 bg-cyan-500/10 text-cyan-700 dark:border-cyan-100/16 dark:bg-cyan-100/8 dark:text-cyan-100/90">
                   <Sparkles className="h-3.5 w-3.5" />
                 </span>
                 <div className="text-[13.5px] font-semibold text-sidebar-foreground">Description suggestion</div>
               </div>
-              <Badge variant="outline" className="h-6 border-cyan-200/25 bg-cyan-300/10 px-2 text-[11px] font-semibold text-cyan-100">
+              <Badge variant="outline" className="h-5 rounded-full border-cyan-600/25 bg-cyan-500/10 px-2 text-[10px] font-semibold text-cyan-700 dark:border-cyan-100/18 dark:bg-cyan-100/8 dark:text-cyan-100/78">
                 AI
               </Badge>
             </div>
-            <div className="space-y-2 rounded-md border border-violet-200/12 bg-background/88 px-3.5 py-3 shadow-sm">
-              {smartDescription.map((line, index) => (
-                <p key={`${line}-${index}`} className="text-[14px] font-medium leading-6 text-sidebar-foreground/95">
-                  {line}
-                </p>
-              ))}
+            <div className="space-y-2 rounded-md border border-border dark:border-white/[0.045] bg-background/94 px-3.5 py-3 shadow-sm">
+              {retagStatus === "queued" ? (
+                <div className="space-y-2.5 py-0.5">
+                  <Skeleton className="h-3.5 w-full" />
+                  <Skeleton className="h-3.5 w-11/12" />
+                  <Skeleton className="h-3.5 w-2/3" />
+                </div>
+              ) : (
+                smartDescription.map((line, index) => (
+                  <p key={`${line}-${index}`} className="text-[14px] font-medium leading-6 text-sidebar-foreground/95">
+                    {line}
+                  </p>
+                ))
+              )}
             </div>
           </div>
 
-          <div className="relative overflow-hidden rounded-lg border border-violet-300/18 bg-[linear-gradient(180deg,rgba(15,23,42,0.34),rgba(139,92,246,0.06))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-200/35 to-transparent" />
+          <div className="relative overflow-hidden rounded-lg border border-border dark:border-white/[0.05] bg-muted/40 dark:bg-transparent dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(15,23,42,0.18))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-600/20 dark:via-cyan-100/18 to-transparent" />
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[13.5px] font-semibold text-sidebar-foreground/90">Generated tags</span>
+              <span className="text-[13px] font-semibold text-sidebar-foreground/84">Generated tags</span>
             </div>
-            {Array.isArray(asset.smart_tags) && asset.smart_tags.length > 0 ? (
-              <div className="mt-3 flex flex-wrap gap-2">
+            {retagStatus === "queued" ? (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                <Skeleton className="h-7 w-16 rounded-full" />
+                <Skeleton className="h-7 w-20 rounded-full" />
+                <Skeleton className="h-7 w-14 rounded-full" />
+                <Skeleton className="h-7 w-24 rounded-full" />
+              </div>
+            ) : Array.isArray(asset.smart_tags) && asset.smart_tags.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-1.5">
                 {asset.smart_tags.map((tag) => {
                   const alreadyAdded = hasManualTag(tag);
                   return (
@@ -538,13 +706,13 @@ function AssetFields({
                       onClick={() => addSmartTag(tag)}
                       disabled={alreadyAdded}
                       className={cn(
-                        "inline-flex min-h-9 max-w-full items-center gap-1.5 rounded-md border px-3 py-1.5 text-[13px] font-semibold leading-4 shadow-sm transition",
+                        "inline-flex min-h-7 max-w-full items-center gap-1 rounded-full border px-2.5 py-1 text-[11.5px] font-medium leading-4 shadow-sm transition",
                         alreadyAdded
-                          ? "border-cyan-200/16 bg-cyan-300/8 text-sidebar-foreground/62"
-                          : "border-violet-200/24 bg-[linear-gradient(135deg,rgba(167,139,250,0.14),rgba(34,211,238,0.06))] text-sidebar-foreground hover:border-violet-200/40 hover:bg-violet-400/14 hover:text-sidebar-foreground"
+                          ? "border-cyan-600/20 bg-cyan-500/[0.08] text-sidebar-foreground/54 dark:border-cyan-100/12 dark:bg-cyan-100/[0.055]"
+                          : "border-border bg-muted/50 text-sidebar-foreground/72 hover:border-cyan-600/25 hover:bg-cyan-500/10 hover:text-sidebar-foreground/88 dark:border-white/[0.065] dark:bg-white/[0.045] dark:hover:border-cyan-100/18 dark:hover:bg-cyan-100/[0.075]"
                       )}
                     >
-                      {alreadyAdded ? <Check className="h-3.5 w-3.5 shrink-0" /> : null}
+                      {alreadyAdded ? <Check className="h-3 w-3 shrink-0 text-cyan-700 dark:text-cyan-100/70" /> : null}
                       <span className="truncate">{displayTagLabel(tag)}</span>
                     </button>
                   );
@@ -561,7 +729,7 @@ function AssetFields({
         <div className="space-y-1 rounded-lg bg-background/45 p-1">
           <div className={rowClassName}>
             <span className={labelClassName}>Format</span>
-            <span className={cn(valueClassName, "font-mono")}>{getMimeTypeDisplay(asset.mime_type)}</span>
+            <span className={cn(valueClassName, "font-mono")}>{getFormatDisplay()}</span>
           </div>
           <div className={rowClassName}>
             <span className={labelClassName}>Size</span>
@@ -577,6 +745,12 @@ function AssetFields({
               <span className={valueClassName}>{formatDuration(asset.duration_ms)}</span>
             </div>
           ) : null}
+          {rawCameraRows.length > 0 ? rawCameraRows.map((row) => (
+            <div key={row.label} className={rowClassName}>
+              <span className={labelClassName}>{row.label}</span>
+              <span className={valueClassName}>{row.value}</span>
+            </div>
+          )) : null}
           <Separator className="my-1 bg-sidebar-border/35" />
           <div className={rowClassName}>
             <span className={labelClassName}>Uploaded</span>
@@ -602,6 +776,15 @@ function AssetFields({
                     </AvatarFallback>
                   </Avatar>
                   <span className="min-w-0 truncate text-[13.5px] font-semibold text-sidebar-foreground">{uploaderProfile.display_name || "Unknown User"}</span>
+                </>
+              ) : asset.uploaded_by_guest_name ? (
+                <>
+                  <Avatar className="h-5 w-5 shrink-0">
+                    <AvatarFallback className={cn("text-xs", AVATAR_FALLBACK_CLASS)}>
+                      {getAvatarInitials(asset.uploaded_by_guest_name)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <span className="min-w-0 truncate text-[13.5px] font-semibold text-sidebar-foreground">{asset.uploaded_by_guest_name}</span>
                 </>
               ) : (
                 <span className={valueClassName}>Unknown</span>
@@ -730,9 +913,12 @@ export type CommentItem = {
   text: string;
   emoji?: { [k: string]: number };
   hasDrawing?: boolean;
+  page?: number;
   timeSec?: number; // optional media time for clients like video
   isCompleted?: boolean; // Mark comment as resolved/completed
   isDeleted?: boolean; // Soft delete flag
+  canManageComment?: boolean;
+  canDeleteComment?: boolean; // Server-owned: ownership OR workspace-admin override (delete only, not edit)
   createdAt?: string;
   versionLabel?: string;
   versionColor?: "default" | "secondary" | "destructive" | "outline";
@@ -758,6 +944,8 @@ export type CommentsPanelProps = {
   titleRight?: string;
   items: CommentItem[];
   onItemClick?: (id: string) => void;
+  onCollapse?: () => void;
+  collapseLabel?: string;
 
   // Comment actions
   onEditComment?: (id: string, newText: string) => void;
@@ -778,11 +966,15 @@ export type CommentsPanelProps = {
     tags?: string[] | null;
     smart_tags?: string[] | null;
     smart_description?: string | null;
+    smart_metadata_provider?: string | null;
+    ai_metadata?: { provider?: string | null } | null;
     project_id?: string | null;
     parent_asset_id?: string | null;
     status?: string | null;
     assigned_to?: string | null;
     uploaded_by?: string | null;
+    uploaded_by_guest_name?: string | null;
+    uploaded_by_guest_email?: string | null;
     created_at: string;
     updated_at?: string | null;
     uploaded_at?: string;
@@ -795,6 +987,8 @@ export type CommentsPanelProps = {
     storage_path: string;
   } | null;
   onAssetMetadataSave?: (patch: AssetMetadataPatch) => Promise<void> | void;
+  onRetagAsset?: () => void;
+  retagStatus?: "idle" | "queued" | "error";
   profiles?: Record<string, {
     id: string;
     display_name?: string | null;
@@ -809,6 +1003,8 @@ export type CommentsPanelProps = {
   formatTime?: (seconds: number) => string;
   annotating?: boolean;
   onToggleAnnotating?: () => void;
+  reviewMode?: CommentDockMode;
+  onReviewModeChange?: (mode: CommentDockMode) => void;
   tool?: Tool;
   onToolChange?: (tool: Tool) => void;
   color?: string;
@@ -817,6 +1013,39 @@ export type CommentsPanelProps = {
   onUndo?: () => void;
   onClear?: () => void;
   onCommentSubmit?: (text: string) => void;
+  commentValue?: string;
+  onCommentChange?: (value: string) => void;
+  showAnnotationControls?: boolean;
+
+  // Defaults to the original horizontal 3-button tab row (every other
+  // caller's existing look, unchanged). "rail" swaps in a slim vertical
+  // icon rail on the panel's trailing edge instead -- same underlying
+  // comments/fields/activity content and state, just a different way to
+  // switch between them. Opt-in per caller so this can roll out to one
+  // viewer (Live Review) without visually changing the shared panel
+  // everywhere else it's used.
+  tabStyle?: "tabs" | "rail";
+
+  // Only meaningful alongside tabStyle="rail". When true, renders just the
+  // floating icon rail (no docked content/flyout, no layout width of its
+  // own) instead of today's always-docked two-column split -- the caller
+  // is responsible for positioning it (LiveUrlReview.tsx renders it inside
+  // a `position: relative` canvas wrapper so it overlays the page rather
+  // than narrowing it). Clicking a rail icon while collapsed both switches
+  // tabs and calls onExpand.
+  railCollapsed?: boolean;
+  onExpand?: () => void;
+
+  // Optional controlled active-tab pair. LiveUrlReview.tsx renders the
+  // floating (collapsed) and docked (expanded) rail states as two separate
+  // <CommentsPanel> call sites in different parts of the tree -- React
+  // mounts/unmounts them independently as railCollapsed flips, so an
+  // internal useState here would reset to its default on every expand,
+  // discarding whichever tab was actually clicked. Passing these lifts the
+  // state to the parent, shared across both call sites; omitting them
+  // (every other caller) keeps today's fully self-contained internal state.
+  activeTab?: 'comments' | 'fields' | 'activity';
+  onActiveTabChange?: (tab: 'comments' | 'fields' | 'activity') => void;
 };
 
 type ActivityProfile = {
@@ -831,7 +1060,8 @@ type AssetHistoryRow = {
   event_type: string;
   actor_user_id?: string | null;
   actor_api_key_id?: string | null;
-  metadata?: Record<string, any> | null;
+  actor_guest_name?: string | null;
+  metadata?: Record<string, unknown> | null;
   created_at: string;
 };
 
@@ -859,7 +1089,8 @@ function readableMimeType(value: unknown) {
 }
 
 function changeValue(metadata: AssetHistoryRow["metadata"], field: string, side: "before" | "after") {
-  return metadata?.changes?.[field]?.[side] ?? null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped history payload (type-only, OSS TS version)
+  return (metadata as any)?.changes?.[field]?.[side] ?? null;
 }
 
 function changedFields(metadata: AssetHistoryRow["metadata"]) {
@@ -958,7 +1189,8 @@ function profileName(id: unknown, profiles: Record<string, ActivityProfile>) {
 }
 
 function activityFromHistory(row: AssetHistoryRow, profiles: Record<string, ActivityProfile>): ActivityItem {
-  const metadata = row.metadata ?? {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped history payload (type-only, OSS TS version)
+  const metadata: any = row.metadata ?? {};
   const statusBefore = changeValue(metadata, "status", "before");
   const statusAfter = changeValue(metadata, "status", "after");
   const assignedUserAfter = changeValue(metadata, "assigned_to", "after");
@@ -968,7 +1200,10 @@ function activityFromHistory(row: AssetHistoryRow, profiles: Record<string, Acti
     : assignedUserAfter;
   const assignedAfterName = profileName(assignedAfterId, profiles);
   const actorId = row.actor_api_key_id ? apiKeyActorProfileId(row.actor_api_key_id) : row.actor_user_id;
-  const base = { id: `history:${row.id}`, eventType: row.event_type, actorId, createdAt: row.created_at };
+  // Guests have no profile/actorId — carry their name through directly so
+  // the render fallback (actor?.display_name ?? actorName ?? "System")
+  // shows who it was instead of misleadingly reading as an automated action.
+  const base = { id: `history:${row.id}`, eventType: row.event_type, actorId, actorName: row.actor_guest_name ?? null, createdAt: row.created_at };
 
   switch (row.event_type) {
     case "uploaded": {
@@ -978,6 +1213,14 @@ function activityFromHistory(row: AssetHistoryRow, profiles: Record<string, Acti
       ].filter(Boolean).join(" · ");
       return { ...base, title: "Uploaded asset", detail: details, meta: metadataUploadSummary(metadata), kind: "upload" };
     }
+    case "website_review_created":
+      return {
+        ...base,
+        title: "Created website review",
+        detail: metadata.ai_metadata?.source_url ?? metadata.ai_metadata?.website_url ?? null,
+        meta: metadata.tags ? `Tags: ${formatValueForActivity("tags", metadata.tags, profiles)}` : null,
+        kind: "review",
+      };
     case "approved":
       return {
         ...base,
@@ -1143,14 +1386,14 @@ function ActivityTimeline({
 
   const eventAppearance = (kind: ActivityItem["kind"]) => {
     switch (kind) {
-      case "comment": return { Icon: MessageSquare, color: "border-sky-500/20 bg-sky-500/10 text-sky-300" };
-      case "status": return { Icon: CheckCircle2, color: "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" };
-      case "review": return { Icon: CheckCircle2, color: "border-amber-500/20 bg-amber-500/10 text-amber-300" };
-      case "version": return { Icon: Layers, color: "border-violet-500/20 bg-violet-500/10 text-violet-300" };
-      case "assignment": return { Icon: UserRound, color: "border-cyan-500/20 bg-cyan-500/10 text-cyan-300" };
-      case "upload": return { Icon: Upload, color: "border-blue-500/20 bg-blue-500/10 text-blue-300" };
-      case "metadata": return { Icon: Tag, color: "border-indigo-500/20 bg-indigo-500/10 text-indigo-300" };
-      case "smart": return { Icon: Sparkles, color: "border-fuchsia-500/20 bg-fuchsia-500/10 text-fuchsia-300" };
+      case "comment": return { Icon: MessageSquare, color: "border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-300" };
+      case "status": return { Icon: CheckCircle2, color: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" };
+      case "review": return { Icon: CheckCircle2, color: "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300" };
+      case "version": return { Icon: Layers, color: "border-violet-500/20 bg-violet-500/10 text-violet-700 dark:text-violet-300" };
+      case "assignment": return { Icon: UserRound, color: "border-cyan-500/20 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300" };
+      case "upload": return { Icon: Upload, color: "border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300" };
+      case "metadata": return { Icon: Tag, color: "border-indigo-500/20 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300" };
+      case "smart": return { Icon: Sparkles, color: "border-fuchsia-500/20 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300" };
       default: return { Icon: Tag, color: "border-sidebar-border bg-sidebar-accent/40 text-sidebar-foreground/70" };
     }
   };
@@ -1230,7 +1473,7 @@ function ActivityTimeline({
       ) : (
         <div className="relative space-y-5">
           {error ? (
-            <div className="mb-4 rounded-md border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-xs text-amber-200/80">
+            <div className="mb-4 rounded-md border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-xs text-amber-700 dark:text-amber-200/80">
               Audit events are unavailable for your access level. Showing visible discussion activity.
             </div>
           ) : null}
@@ -1307,6 +1550,7 @@ function SingleCommentItem({
   assetId,
   formatTime,
   canManageComment,
+  isWorkspaceAdmin,
 }: {
   item: CommentItem;
   isLast: boolean;
@@ -1332,49 +1576,11 @@ function SingleCommentItem({
   assetId?: string | null;
   formatTime?: (seconds: number) => string;
   canManageComment: boolean;
+  isWorkspaceAdmin: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(item.text);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  // Convert mention tokens and timestamps to display-friendly format for editing
-  const getEditableText = (text: string) => {
-    let editableText = text;
-
-    // Convert mention tokens @[id:Display Name] to @Display Name
-    editableText = editableText.replace(/@\[([^:]+):([^\]]+)\]/g, '@$2');
-
-    // Convert timestamp tokens (leave as-is since they're already readable)
-    // Timestamps are in format like 00:01:23:45 which are human readable
-
-    return editableText;
-  };
-
-  // Convert display names back to mention tokens 
-  // Note: This is a simplified version. In a full implementation, you'd need:
-  // 1. An autocomplete/mention picker during editing
-  // 2. A way to resolve display names back to user IDs
-  // 3. Proper validation of mentions
-  const convertToMentionTokens = (text: string, profiles: typeof mentionedProfiles) => {
-    let convertedText = text;
-
-    // Only convert if we have profiles loaded
-    if (profiles && Object.keys(profiles).length > 0) {
-      // Try to preserve existing mention structure if the display name matches
-      // This is a basic approach - ideally you'd have a proper mention system
-      Object.entries(profiles).forEach(([userId, profile]) => {
-        if (profile.display_name) {
-          const displayMention = `@${profile.display_name}`;
-          const tokenMention = `@[${userId}:${profile.display_name}]`;
-          // Use word boundary to avoid partial matches
-          const regex = new RegExp(`\\b${displayMention.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g');
-          convertedText = convertedText.replace(regex, tokenMention);
-        }
-      });
-    }
-
-    return convertedText;
-  };
 
   // Time formatting function (available for future use)
   // const formatTime = (sec?: number) => {
@@ -1488,7 +1694,7 @@ function SingleCommentItem({
       const matchText = matchItem.match[0];
 
       switch (matchItem.type) {
-        case 'mention':
+        case 'mention': {
           const id = matchItem.match[1];
           const label = matchItem.match[2];
           const mentionedUser = profiles[id];
@@ -1538,6 +1744,7 @@ function SingleCommentItem({
             </TooltipProvider>
           );
           break;
+        }
 
         case 'timestamp':
           nodes.push(
@@ -1554,7 +1761,7 @@ function SingleCommentItem({
           nodes.push(
             <span
               key={`url-${keyIdx++}`}
-              className="text-blue-400 underline cursor-pointer hover:text-blue-300"
+              className="text-blue-600 underline cursor-pointer hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
               onClick={(e) => {
                 e.stopPropagation();
                 window.open(matchText, '_blank', 'noopener,noreferrer');
@@ -1585,8 +1792,16 @@ function SingleCommentItem({
   const authorDisplayName = authorProfile?.display_name || item.author || "User";
   const authorAvatar = authorProfile?.avatar_url || "";
   const authorInitials = getAvatarInitials(authorDisplayName);
+  const authorAvatarColor = getUserAvatarColor(item.authorId, authorDisplayName);
 
   const timeString = formatRelativeTime(item.createdAt);
+  const canToggleComment = Boolean(onToggleCompleted);
+  const canEditComment = Boolean(onEditComment && (canManageComment || item.canManageComment));
+  // Delete is a superset of edit: a workspace admin (or a server-granted
+  // per-item override for share flows) can delete a comment they didn't
+  // author, without gaining edit rights on it.
+  const canDeleteComment = Boolean(onDeleteComment && (canManageComment || item.canManageComment || item.canDeleteComment || isWorkspaceAdmin));
+  const canShowCommentMenu = canEditComment || canDeleteComment;
 
   return (
     <div
@@ -1603,7 +1818,7 @@ function SingleCommentItem({
       <div className="shrink-0 pt-0.5">
         <Avatar className="h-7 w-7 ring-1 ring-sidebar-border/50 shadow-sm sm:h-8 sm:w-8">
           <AvatarImage src={authorAvatar} alt={authorDisplayName} />
-          <AvatarFallback className={cn("text-[10px] font-medium", AVATAR_FALLBACK_CLASS)}>
+          <AvatarFallback className={cn("text-[10px] font-medium", AVATAR_FALLBACK_CLASS)} style={{ backgroundColor: authorAvatarColor }}>
             {authorInitials}
           </AvatarFallback>
         </Avatar>
@@ -1629,9 +1844,16 @@ function SingleCommentItem({
               </span>
             )}
 
+            {typeof item.page === "number" && Number.isFinite(item.page) && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sidebar-accent/50 text-sidebar-foreground/70 border border-sidebar-border/60">
+                <FileText className="h-3 w-3" />
+                Page {item.page}
+              </span>
+            )}
+
             {/* Version Badge */}
             {item.versionLabel && (
-              <Badge variant={item.versionColor as any || "secondary"} className="h-5 px-1.5 text-[10px] pointer-events-none">
+              <Badge variant={item.versionColor ?? "secondary"} className="h-5 px-1.5 text-[10px] pointer-events-none">
                 {item.versionLabel}
               </Badge>
             )}
@@ -1645,34 +1867,9 @@ function SingleCommentItem({
             )}
           </div>
 
-          {/* Actions (visible on hover or if menu open) */}
+          {canToggleComment || canShowCommentMenu ? (
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className={cn(
-                      "h-6 w-6",
-                      item.isCompleted ? "text-green-600 dark:text-green-400" : "text-muted-foreground hover:text-green-600"
-                    )}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggleCompleted?.(item.id);
-
-                    }}
-                  >
-                    <CheckCircle2 className={cn("h-4 w-4", item.isCompleted && "fill-current")} />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {item.isCompleted ? 'Mark incomplete' : 'Complete'}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-
-            {canManageComment ? (
+            {canShowCommentMenu ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-foreground">
@@ -1684,27 +1881,59 @@ function SingleCommentItem({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-40">
-                  <DropdownMenuItem onClick={(e) => {
-                    e.stopPropagation();
-                    handleStartEdit();
-                  }}>
-                    <Edit2 className="h-4 w-4 mr-2" />
-                    Edit
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={(e) => {
+                  {canEditComment ? (
+                    <DropdownMenuItem onClick={(e) => {
                       e.stopPropagation();
-                      onDeleteComment?.(item.id);
-                    }}
-                    className="text-red-600 dark:text-red-400 focus:text-red-600"
-                  >
-                    <Trash2 className="h-4 w-4 mr-2" />
-                    Delete
-                  </DropdownMenuItem>
+                      handleStartEdit();
+                    }}>
+                      <Edit2 className="h-4 w-4 mr-2" />
+                      Edit
+                    </DropdownMenuItem>
+                  ) : null}
+                  {canDeleteComment ? (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteComment?.(item.id);
+                      }}
+                      className="text-red-600 dark:text-red-400 focus:text-red-600"
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Delete
+                    </DropdownMenuItem>
+                  ) : null}
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : null}
+
+            {canToggleComment ? (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "h-6 w-6",
+                        item.isCompleted ? "text-green-600 dark:text-green-400" : "text-muted-foreground hover:text-green-600"
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleCompleted?.(item.id);
+
+                      }}
+                    >
+                      <CheckCircle2 className={cn("h-4 w-4", item.isCompleted && "fill-current")} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {item.isCompleted ? 'Mark incomplete' : 'Complete'}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            ) : null}
           </div>
+          ) : null}
         </div>
 
         {/* Comment Body */}
@@ -1782,6 +2011,8 @@ export default function CommentsPanel({
   titleRight = "Info",
   items,
   onItemClick,
+  onCollapse,
+  collapseLabel = "Collapse panel",
 
   // Comment actions
   onEditComment,
@@ -1797,6 +2028,8 @@ export default function CommentsPanel({
   // Asset data for Fields tab
   asset,
   onAssetMetadataSave,
+  onRetagAsset,
+  retagStatus,
   profiles = {},
 
   // Bottom comment dock props
@@ -1807,6 +2040,8 @@ export default function CommentsPanel({
   formatTime,
   annotating = false,
   onToggleAnnotating,
+  reviewMode,
+  onReviewModeChange,
   tool = "pen",
   onToolChange,
   color = "#ff7a00",
@@ -1815,8 +2050,18 @@ export default function CommentsPanel({
   onUndo,
   onClear,
   onCommentSubmit,
+  commentValue,
+  onCommentChange,
+  showAnnotationControls = true,
+  tabStyle = "tabs",
+  railCollapsed = false,
+  onExpand,
+  activeTab: controlledActiveTab,
+  onActiveTabChange,
 }: CommentsPanelProps) {
-  const [activeTab, setActiveTab] = useState<'comments' | 'fields' | 'activity'>('comments');
+  const [internalActiveTab, setInternalActiveTab] = useState<'comments' | 'fields' | 'activity'>('comments');
+  const activeTab = controlledActiveTab ?? internalActiveTab;
+  const setActiveTab = onActiveTabChange ?? setInternalActiveTab;
   const [mentionedProfiles, setMentionedProfiles] = useState<Record<string, {
     id: string;
     display_name?: string | null;
@@ -1825,6 +2070,7 @@ export default function CommentsPanel({
     project_role?: string;
   }>>({});
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [isWorkspaceAdmin, setIsWorkspaceAdmin] = useState(false);
   const [activityHistory, setActivityHistory] = useState<AssetHistoryRow[]>([]);
   const [activityProfiles, setActivityProfiles] = useState<Record<string, ActivityProfile>>({});
   const [activityLoading, setActivityLoading] = useState(false);
@@ -1842,6 +2088,34 @@ export default function CommentsPanel({
       cancelled = true;
     };
   }, []);
+
+  // Workspace admins/owners can delete (not edit) any comment on this asset.
+  // Resolved client-side (self-row RLS read) rather than threaded down from
+  // every caller — organizationId/currentUserId are already available here
+  // for the authenticated in-app view. Share-guest flows instead carry a
+  // server-computed item.canDeleteComment (see CommentItem), since a guest
+  // has no organization_members row to read.
+  useEffect(() => {
+    let cancelled = false;
+    if (!organizationId || !currentUserId) {
+      setIsWorkspaceAdmin(false);
+      return;
+    }
+    void supabase
+      .from("organization_members")
+      .select("role")
+      .eq("organization_id", organizationId)
+      .eq("user_id", currentUserId)
+      .in("role", ["owner", "admin"])
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled) setIsWorkspaceAdmin(Boolean(data));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId, currentUserId]);
 
   const loadedProfilesRef = useRef<Set<string>>(new Set());
   // Scan items for mention tokens AND author IDs
@@ -1963,7 +2237,7 @@ export default function CommentsPanel({
       setActivityLoading(true);
       const { data, error } = await supabase
         .from("asset_history")
-        .select("id, asset_id, event_type, actor_user_id, actor_api_key_id, metadata, created_at")
+        .select("id, asset_id, event_type, actor_user_id, actor_api_key_id, actor_guest_name, metadata, created_at")
         .eq("asset_id", assetId)
         .order("created_at", { ascending: false });
 
@@ -2031,30 +2305,276 @@ export default function CommentsPanel({
     };
   }, [activeTab, assetId]);
 
-  // Sort items by time
+  // Comments render in conversation order. Media timestamps remain badges/seek targets,
+  // but they should not reorder newly submitted comments above older ones.
   const sortedItems = useMemo(() => {
-    return [...items].sort((a, b) => {
-      // If both have media time, sort by media time
-      if (Number.isFinite(a.timeSec) && Number.isFinite(b.timeSec)) {
-        return (a.timeSec || 0) - (b.timeSec || 0);
-      }
-      // Otherwise sort by creation time (oldest first)
-      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      return timeA - timeB;
-    });
+    return items
+      .map((item, index) => ({ item, index }))
+      .sort((left, right) => {
+        const leftTime = left.item.createdAt ? Date.parse(left.item.createdAt) : Number.NaN;
+        const rightTime = right.item.createdAt ? Date.parse(right.item.createdAt) : Number.NaN;
+
+        if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+          return leftTime - rightTime;
+        }
+
+        return left.index - right.index;
+      })
+      .map(({ item }) => item);
   }, [items]);
   const activityProfileMap = useMemo(
     () => ({ ...mentionedProfiles, ...profiles, ...activityProfiles }),
     [activityProfiles, mentionedProfiles, profiles],
   );
 
+  // Shared between both header styles below -- the actual comments/fields/
+  // activity content and the bottom compose dock never change based on
+  // tabStyle, only how the three tabs are presented/switched between does.
+  const tabContent = (
+    <div className="flex-1 flex flex-col min-h-0">
+      <ScrollArea className={cn("flex-1 min-h-0 w-full [&_[data-radix-scroll-area-viewport]>div]:!block", showCommentDock && "pb-2")}>
+        {activeTab === 'comments' ? (
+          // Comments Tab Content
+          sortedItems.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-32 text-center px-4 mt-10">
+              <div className="w-12 h-12 rounded-full bg-sidebar-accent/50 flex items-center justify-center mb-3">
+                <svg className="w-6 h-6 text-sidebar-foreground/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+              </div>
+              <p className="text-sidebar-foreground/60 text-sm">No comments yet</p>
+              <p className="text-sidebar-foreground/40 text-xs mt-1">Start a conversation</p>
+            </div>
+          ) : (
+            <AnimatePresence initial={false}>
+              {sortedItems
+                .filter(item => !item.isDeleted)
+                .map((item, idx, filteredItems) => (
+                  <motion.div
+                    key={item.id}
+                    layout="position"
+                    initial={{ opacity: 0, y: 12, scale: 0.985 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.985 }}
+                    transition={{ duration: 0.18, ease: "easeOut" }}
+                  >
+                    <SingleCommentItem
+                      item={item}
+                      isLast={idx === filteredItems.length - 1}
+                      onItemClick={onItemClick}
+                      onEditComment={onEditComment}
+                      onDeleteComment={onDeleteComment}
+                      onToggleCompleted={onToggleCompleted}
+                      profiles={profiles}
+                      mentionedProfiles={mentionedProfiles}
+                      projectId={projectId}
+                      organizationId={organizationId}
+                      workspaceId={workspaceId}
+                      assetId={assetId}
+                      formatTime={formatTime}
+                      canManageComment={Boolean(currentUserId && item.authorId === currentUserId)}
+                      isWorkspaceAdmin={isWorkspaceAdmin}
+                    />
+                  </motion.div>
+                ))}
+            </AnimatePresence>
+          )
+        ) : activeTab === 'fields' ? (
+          <AssetFields
+            asset={asset}
+            profiles={profiles}
+            projectLocations={projectLocations}
+            loadingProjectLocations={projectLocationsLoading}
+            onAssetMetadataSave={onAssetMetadataSave}
+            onRetagAsset={onRetagAsset}
+            retagStatus={retagStatus}
+          />
+        ) : (
+          <ActivityTimeline
+            history={activityHistory}
+            comments={items}
+            loading={activityLoading}
+            error={activityError}
+            profiles={activityProfileMap}
+          />
+        )}
+      </ScrollArea>
+
+      {/* Bottom Comment Dock - Fixed at bottom */}
+      {showCommentDock && activeTab === 'comments' && (
+        <div className="mt-auto shrink-0">
+          <BottomCommentDock
+            currentTime={currentTime}
+            includeTimestamp={includeTimestamp}
+            onToggleTimestamp={onToggleTimestamp || (() => { })}
+            formatTime={formatTime}
+            annotating={annotating}
+            onToggleAnnotating={onToggleAnnotating || (() => { })}
+            reviewMode={reviewMode}
+            onReviewModeChange={onReviewModeChange}
+            tool={tool}
+            onToolChange={onToolChange || (() => { })}
+            color={color}
+            onColorChange={onColorChange || (() => { })}
+            canUndo={canUndo}
+            onUndo={onUndo || (() => { })}
+            onClear={onClear || (() => { })}
+            onSubmit={onCommentSubmit || (() => { })}
+            value={commentValue}
+            onChange={onCommentChange}
+            showAnnotationControls={showAnnotationControls}
+            projectId={projectId}
+            organizationId={organizationId}
+            workspaceId={workspaceId}
+            assetId={assetId}
+          />
+        </div>
+      )}
+    </div>
+  );
+
+  if (tabStyle === "rail") {
+    // Vertical icon rail on the panel's trailing edge, replacing the
+    // horizontal 3-button tab row -- opt-in per caller (LiveUrlReview.tsx
+    // for now), built on our own existing sidebar color tokens rather than
+    // copying a specific reference design's own palette/branding.
+    const railTabs: Array<{ id: 'fields' | 'comments' | 'activity'; label: string; icon: typeof Info }> = [
+      { id: 'fields', label: titleRight, icon: Info },
+      { id: 'comments', label: titleLeft, icon: MessageSquare },
+      { id: 'activity', label: 'Activity', icon: History },
+    ];
+    const activeRailLabel = railTabs.find((t) => t.id === activeTab)?.label ?? titleLeft;
+
+    // Shared between the floating (collapsed) and docked (expanded) modes
+    // below, so both stay visually/behaviorally identical rather than
+    // drifting into two hand-maintained copies. Clicking a tab while
+    // collapsed switches to it and expands; while already expanded,
+    // clicking a *different* tab just switches, but clicking the tab
+    // that's already active collapses instead -- a toggle, so there's a
+    // way to close the panel by clicking the same icon again rather than
+    // only via the separate collapse button.
+    const railButtons = (
+      <>
+        {railTabs.map(({ id, label, icon: Icon }) => (
+          <Tooltip key={id}>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!railCollapsed && activeTab === id) {
+                    onCollapse?.();
+                    return;
+                  }
+                  setActiveTab(id);
+                  if (railCollapsed) onExpand?.();
+                }}
+                aria-label={label}
+                className={cn(
+                  "flex h-11 w-11 shrink-0 items-center justify-center rounded-lg transition-colors",
+                  activeTab === id && !railCollapsed
+                    ? "bg-sidebar-accent text-sidebar-foreground"
+                    : "text-sidebar-foreground/55 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                )}
+              >
+                <Icon className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left">{label}</TooltipContent>
+          </Tooltip>
+        ))}
+        {!railCollapsed && onCollapse ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onCollapse}
+                aria-label={collapseLabel}
+                className="mt-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-sidebar-foreground/55 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+              >
+                <PanelRightClose className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="left">{collapseLabel}</TooltipContent>
+          </Tooltip>
+        ) : null}
+      </>
+    );
+
+    // Neither state has any layout footprint -- LiveUrlReview.tsx renders
+    // this as a child of its (position: relative) canvas column, so it
+    // always floats over the live page rather than pushing/shrinking it,
+    // collapsed or expanded alike (ruttl-style: the rail itself never moves
+    // or resizes when you open a tab, only a flyout appears beside it). A
+    // flush, full-height edge strip -- not a floating card with margin/
+    // rounded corners/shadow around it -- reads as part of the app's own
+    // chrome rather than a popover, matching the reference. Still only as
+    // wide as its own content, so it never blocks clicks/scroll on the
+    // underlying iframe outside its own hit area.
+    const rail = (
+      <div className="flex h-full w-14 shrink-0 flex-col items-center gap-1.5 border-l border-sidebar-border bg-sidebar py-3">
+        {railButtons}
+      </div>
+    );
+
+    // Both states are `inset-0` (not just right-0/top-0/bottom-0) with
+    // pointer-events-none on the outer box and pointer-events-auto on the
+    // actual visible content -- this makes the flyout's max-width below
+    // resolve against this overlay's *real* container (the website-viewing
+    // wrapper LiveUrlReview.tsx renders it inside, via 100%), instead of
+    // shrink-to-fit sizing that has no well-defined percentage basis, while
+    // still never blocking clicks over the empty space beside the visible
+    // rail/flyout.
+    if (railCollapsed) {
+      return (
+        <div data-testid="live-review-comments-rail" className={cn("absolute inset-0 z-20 flex flex-row items-stretch justify-end pointer-events-none", className)}>
+          <div className="pointer-events-auto flex">{rail}</div>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        data-testid="live-review-comments-rail"
+        className={cn("absolute inset-0 z-20 flex flex-row items-stretch justify-end pointer-events-none", className)}
+      >
+        {/* The flyout -- an overlay, not a docked layout sibling, so the
+            canvas/iframe behind it never resizes when this opens. Same
+            flush, full-height treatment as the rail (border instead of a
+            floating card), so the two read as one continuous edge panel;
+            its existing internal ScrollArea (in tabContent) handles
+            scrolling within that height. max-w uses 100% of this overlay's
+            own container, not 100vw -- the app has its own chrome (a left
+            sidebar) outside this component, so the real available width is
+            narrower than the full browser viewport; capping against 100vw
+            let the flyout size itself wider than what's actually available
+            and get clipped by an ancestor's overflow-hidden. */}
+        <div className="pointer-events-auto flex h-full w-[360px] max-w-[calc(100%-3.5rem)] flex-col overflow-hidden border-l border-sidebar-border bg-background">
+          <div className="flex shrink-0 items-center justify-between gap-2 px-4 pb-2 pt-3">
+            <span className="text-sm font-semibold text-sidebar-foreground">{activeRailLabel}</span>
+            {onCollapse ? (
+              <button
+                type="button"
+                onClick={onCollapse}
+                aria-label={collapseLabel}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-sidebar-foreground/55 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            ) : null}
+          </div>
+          {tabContent}
+        </div>
+        <div className="pointer-events-auto flex">{rail}</div>
+      </div>
+    );
+  }
+
   return (
     <aside className={cn("flex h-full min-h-0 w-full flex-col overflow-hidden border-t border-sidebar-border bg-background/95 backdrop-blur lg:w-[400px] lg:min-w-[320px] lg:max-w-[400px] lg:border-l lg:border-t-0", className)}>
       {/* Header */}
       <div className="shrink-0 px-4 pb-2 pt-3">
-        <div className="flex items-center justify-between">
-          <div className="grid w-full grid-cols-3 gap-1">
+        <div className="flex items-center justify-between gap-2">
+          <div className="grid min-w-0 flex-1 grid-cols-3 gap-1">
             <Button
               variant="ghost"
               size="sm"
@@ -2095,6 +2615,25 @@ export default function CommentsPanel({
               Activity
             </Button>
           </div>
+          {onCollapse ? (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={collapseLabel}
+                    onClick={onCollapse}
+                    className="h-8 w-8 shrink-0 text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  >
+                    <PanelRightClose className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{collapseLabel}</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          ) : null}
           {/* <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" className="h-8 w-8 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent">
               <SortAsc className="h-4 w-4" />
@@ -2122,99 +2661,7 @@ export default function CommentsPanel({
         </div>
       </div>
 
-      {/* Tab Content */}
-      <div className="flex-1 flex flex-col min-h-0">
-        <ScrollArea className={cn("flex-1 min-h-0 w-full", showCommentDock && "pb-2")}>
-          {activeTab === 'comments' ? (
-            // Comments Tab Content
-            sortedItems.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-32 text-center px-4 mt-10">
-                <div className="w-12 h-12 rounded-full bg-sidebar-accent/50 flex items-center justify-center mb-3">
-                  <svg className="w-6 h-6 text-sidebar-foreground/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                  </svg>
-                </div>
-                <p className="text-sidebar-foreground/60 text-sm">No comments yet</p>
-                <p className="text-sidebar-foreground/40 text-xs mt-1">Start a conversation</p>
-              </div>
-            ) : (
-              <AnimatePresence initial={false}>
-                {sortedItems
-                  .filter(item => !item.isDeleted)
-                  .map((item, idx, filteredItems) => (
-                    <motion.div
-                      key={item.id}
-                      layout="position"
-                      initial={{ opacity: 0, y: 12, scale: 0.985 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: -8, scale: 0.985 }}
-                      transition={{ duration: 0.18, ease: "easeOut" }}
-                    >
-                      <SingleCommentItem
-                        item={item}
-                        isLast={idx === filteredItems.length - 1}
-                        onItemClick={onItemClick}
-                        onEditComment={onEditComment}
-                        onDeleteComment={onDeleteComment}
-                        onToggleCompleted={onToggleCompleted}
-                        profiles={profiles}
-                        mentionedProfiles={mentionedProfiles}
-                        projectId={projectId}
-                        organizationId={organizationId}
-                        workspaceId={workspaceId}
-                        assetId={assetId}
-                        formatTime={formatTime}
-                        canManageComment={Boolean(currentUserId && item.authorId === currentUserId)}
-                      />
-                    </motion.div>
-                  ))}
-              </AnimatePresence>
-            )
-          ) : activeTab === 'fields' ? (
-            <AssetFields
-              asset={asset}
-              profiles={profiles}
-              projectLocations={projectLocations}
-              loadingProjectLocations={projectLocationsLoading}
-              onAssetMetadataSave={onAssetMetadataSave}
-            />
-          ) : (
-            <ActivityTimeline
-              history={activityHistory}
-              comments={items}
-              loading={activityLoading}
-              error={activityError}
-              profiles={activityProfileMap}
-            />
-          )}
-        </ScrollArea>
-
-        {/* Bottom Comment Dock - Fixed at bottom */}
-        {showCommentDock && activeTab === 'comments' && (
-          <div className="mt-auto shrink-0">
-            <BottomCommentDock
-              currentTime={currentTime}
-              includeTimestamp={includeTimestamp}
-              onToggleTimestamp={onToggleTimestamp || (() => { })}
-              formatTime={formatTime}
-              annotating={annotating}
-              onToggleAnnotating={onToggleAnnotating || (() => { })}
-              tool={tool}
-              onToolChange={onToolChange || (() => { })}
-              color={color}
-              onColorChange={onColorChange || (() => { })}
-              canUndo={canUndo}
-              onUndo={onUndo || (() => { })}
-              onClear={onClear || (() => { })}
-              onSubmit={onCommentSubmit || (() => { })}
-              projectId={projectId}
-              organizationId={organizationId}
-              workspaceId={workspaceId}
-              assetId={assetId}
-            />
-          </div>
-        )}
-      </div>
+      {tabContent}
     </aside>
   );
 }

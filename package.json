@@ -23,7 +23,9 @@
     "lint": "pnpm --filter @reloops/web lint",
     "typecheck": "pnpm --filter @reloops/web typecheck && pnpm --filter @reloops/asset-intelligence-worker build",
     "test": "pnpm typecheck && pnpm build && node scripts/smoke-test.mjs && node scripts/collections-ui-regression.mjs",
-    "test:runtime": "node scripts/runtime-smoke.mjs"
+    "test:runtime": "node scripts/runtime-smoke.mjs",
+    "test:project-guest-portal": "node --experimental-strip-types --test scripts/project-guest-portal.spec.mjs",
+    "test:private-asset-urls": "node --experimental-strip-types --test scripts/private-asset-urls.spec.mjs"
   },
   "devDependencies": {
     "typescript": "~5.8.2"

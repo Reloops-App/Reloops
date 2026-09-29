@@ -48,6 +48,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { Card } from "../ui/card";
 import { previewBackgroundClass } from "@/lib/imagePreviewBackground";
 import { useImagePreviewBackground } from "@/hooks/useImagePreviewBackground";
+import { useResolvedAssetFileUrl } from "@/lib/assetFileUrl";
 
 /* ---------------- helpers ---------------- */
 function move<T>(arr: T[], from: number, to: number) {
@@ -106,7 +107,7 @@ function ThumbnailBox({
   const { Icon } = kindBadge(kind);
   const isDesignFile = isDesignPreviewUnavailableAsset(asset);
   const designLabel = getDesignAssetLabel(asset);
-  const originalTransparentPreview = transparentOriginalPreviewUrl(asset) ?? undefined;
+  const originalTransparentPreview = useResolvedAssetFileUrl(transparentOriginalPreviewUrl(asset)) ?? undefined;
   const url =
     originalTransparentPreview ||
     (typeof getThumbnailUrl === "function" ? getThumbnailUrl(asset) : undefined) ||

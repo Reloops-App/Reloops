@@ -446,6 +446,16 @@ const sharePayload = await shareGet.json();
 assert(shareGet.ok && sharePayload.assets?.id === asset.id, "share function reads shared asset");
 assert(Boolean(sharePayload.fileUrl), "share function returns signed file URL");
 
+async function isReachable(fileUrl) {
+  try {
+    const response = await fetch(fileUrl);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+assert(await isReachable(sharePayload.fileUrl), "shared asset signed URL is reachable from the browser");
+
 const sharePost = await fetch(`${url}/functions/v1/share?token=${token}`, {
   method: "POST",
   headers: { "content-type": "application/json", apikey: anonKey },
@@ -457,5 +467,95 @@ const sharePost = await fetch(`${url}/functions/v1/share?token=${token}`, {
 });
 const sharePostPayload = await sharePost.json();
 assert(sharePost.ok && sharePostPayload.comment?.id, "share function writes guest comment");
+
+const projectAssetLinks = await fetch(`${url}/functions/v1/share`, {
+  method: "POST",
+  headers: authHeaders,
+  body: JSON.stringify({ action: "list-asset-share-links", projectId: project.id }),
+});
+const projectAssetLinksPayload = await projectAssetLinks.json().catch(() => null);
+assert(projectAssetLinks.ok && projectAssetLinksPayload?.data?.some((row) => row.id === share.id && row.assets?.title), "Links tab lists the project's asset share links");
+
+const portalPassword = "client-review-123";
+async function callFunction(name, body, token = anonKey) {
+  const response = await fetch(`${url}/functions/v1/${name}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", apikey: anonKey, authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  return { response, payload: await response.json().catch(() => null) };
+}
+const memberToken = signedIn.data.session.access_token;
+
+const portalCreate = await callFunction("project-share", { action: "create", project_id: project.id, allow_upload: true, password: portalPassword }, memberToken);
+const portal = portalCreate.payload?.data;
+assert(portalCreate.response.ok && portal?.id && portal.share_url?.endsWith(`/share/project/${portal.id}`), "project-share creates a guest portal link");
+assert(!("password_hash" in portal) && !("token" in portal), "portal link never exposes its password hash or raw token");
+
+const portalLocked = await callFunction("project-share", { action: "get", token: portal.id });
+assert(portalLocked.response.status === 401, "portal requires its password");
+const portalWrong = await callFunction("project-share", { action: "get", token: portal.id, password: "nope" });
+assert(portalWrong.response.status === 403, "portal rejects a wrong password");
+const portalGet = await callFunction("project-share", { action: "get", token: portal.id, password: portalPassword });
+const portalAssetRow = portalGet.payload?.data?.assets?.find((row) => row.id === asset.id);
+assert(portalGet.response.ok && portalGet.payload.data.project?.id === project.id && portalAssetRow, "guest can browse the shared project");
+assert(await isReachable(portalAssetRow.signed_url), "portal signed file URL is reachable from the browser");
+
+const listed = await callFunction("project-share", { action: "list", project_id: project.id }, memberToken);
+const listedPortal = listed.payload?.data?.find((row) => row.id === portal.id);
+assert(listedPortal?.has_password === true && listedPortal.access_count >= 1, "owner sees the portal with password flag and access count");
+
+const guestAuthorToken = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+const guestComment = await callFunction("project-share-comment", { action: "create", token: portal.id, password: portalPassword, asset_id: asset.id, body: "portal feedback", guest_name: "Portal Guest", guest_email: "guest@example.test", guest_author_token: guestAuthorToken });
+assert(guestComment.response.ok && guestComment.payload?.data?.id, "guest comments on a shared asset");
+const commentList = await callFunction("project-share-comment", { action: "list", token: portal.id, password: portalPassword, asset_id: asset.id, guest_author_token: guestAuthorToken });
+assert(commentList.payload?.data?.find((row) => row.id === guestComment.payload.data.id)?.can_manage === true, "guest can manage their own comment");
+const edited = await callFunction("project-share-comment", { action: "edit", token: portal.id, password: portalPassword, asset_id: asset.id, id: guestComment.payload.data.id, body: "portal feedback (edited)", guest_author_token: guestAuthorToken });
+assert(edited.response.ok && edited.payload?.data?.body === "portal feedback (edited)", "guest edits their own comment");
+const strangerEdit = await callFunction("project-share-comment", { action: "edit", token: portal.id, password: portalPassword, asset_id: asset.id, id: guestComment.payload.data.id, body: "hijack", guest_author_token: "x".repeat(64) });
+assert(strangerEdit.response.status === 403, "another guest cannot edit that comment");
+
+const approval = await callFunction("project-share", { action: "update-status", token: portal.id, password: portalPassword, asset_id: asset.id, status: "approved", guest_name: "Portal Guest", guest_email: "guest@example.test" });
+const { data: approvedRow } = await admin.from("assets").select("status, updated_by_guest_name").eq("id", asset.id).single();
+assert(approval.response.ok && approvedRow.status === "approved" && approvedRow.updated_by_guest_name === "Portal Guest", "guest approval is saved and attributed");
+
+const guestPng = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
+const presign = await callFunction("project-share-upload", { action: "presign", token: portal.id, password: portalPassword, fileName: "guest upload.png", contentType: "image/png", sizeBytes: guestPng.length, clientNonce: crypto.randomUUID() });
+assert(presign.response.ok && presign.payload?.url && presign.payload.objectKey.startsWith(`${workspace.id}/${project.id}/`), "guest gets a signed upload URL inside the project");
+const put = await fetch(presign.payload.url, { method: "PUT", headers: { "content-type": "image/png" }, body: guestPng });
+assert(put.ok, "guest PUTs the file straight to storage");
+const complete = await callFunction("project-share-upload", { action: "complete", token: portal.id, password: portalPassword, assetId: presign.payload.assetId, fileName: "guest upload.png", contentType: "image/png", sizeBytes: guestPng.length, objectKey: presign.payload.objectKey, guest_name: "Portal Guest", guest_email: "guest@example.test" });
+const { data: uploadedRow } = await admin.from("assets").select("uploaded_via_share_link_id, uploaded_by_guest_name, project_id").eq("id", presign.payload.assetId).maybeSingle();
+assert(complete.response.ok && uploadedRow?.uploaded_via_share_link_id === portal.id && uploadedRow.uploaded_by_guest_name === "Portal Guest", "guest upload is attributed and added to the project");
+const jpegCover = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q==";
+const cover = await callFunction("project-share-upload", { action: "set-preview", token: portal.id, password: portalPassword, assetId: presign.payload.assetId, cover_b64: jpegCover });
+assert(cover.response.ok && (await fetch(cover.payload.cover_image_url)).ok, "guest's browser-made cover is stored and publicly loadable");
+const moved = await callFunction("project-share-upload", { action: "move-asset", token: portal.id, password: portalPassword, assetId: presign.payload.assetId, folderId: folderCreate.data.id, guest_name: "Portal Guest" });
+assert(moved.response.ok, "guest moves their own upload into a folder");
+const moveOther = await callFunction("project-share-upload", { action: "move-asset", token: portal.id, password: portalPassword, assetId: asset.id, folderId: folderCreate.data.id, guest_name: "Portal Guest" });
+assert(moveOther.response.status === 403, "guest cannot move files they did not upload");
+
+const { data: folderAsset, error: folderAssetError } = await client.from("assets").insert({
+  workspace_id: workspace.id,
+  project_id: project.id,
+  folder_id: folderCreate.data.id,
+  title: "folder-scoped.txt",
+  storage_path: secondStoragePath,
+  mime_type: "text/plain",
+  size_bytes: secondFile.size,
+}).select("*").single();
+if (folderAssetError) throw folderAssetError;
+const folderPortal = (await callFunction("project-share", { action: "create", project_id: project.id, folder_id: folderCreate.data.id }, memberToken)).payload.data;
+const folderView = await callFunction("project-share", { action: "get", token: folderPortal.id });
+assert(folderView.response.ok && folderView.payload.data.assets.some((row) => row.id === folderAsset.id), "folder portal includes assets in its folder");
+assert(!folderView.payload.data.assets.some((row) => row.id === asset.id), "folder portal excludes project-root assets");
+const folderEscape = await callFunction("project-share", { action: "update-status", token: folderPortal.id, asset_id: asset.id, status: "approved", guest_name: "X" });
+assert(folderEscape.response.status === 403, "folder portal rejects out-of-scope asset access");
+const noUpload = await callFunction("project-share-upload", { action: "presign", token: folderPortal.id, fileName: "x.png", contentType: "image/png", sizeBytes: 10 });
+assert(noUpload.response.status === 403, "a portal without uploads refuses upload requests");
+
+await callFunction("project-share", { action: "revoke", share_link_id: portal.id }, memberToken);
+const revokedPortal = await callFunction("project-share", { action: "get", token: portal.id, password: portalPassword });
+assert(revokedPortal.response.status === 403, "revoked project portal is inaccessible immediately");
 
 console.log("\nruntime smoke passed");

@@ -3,15 +3,14 @@ import { getUserAvatarColor } from "@/lib/avatar-utils";
 
 type BubblePinProps = {
   initials: string;
-  color?: string;
   userId?: string | null;
   userName?: string | null;
   className?: string;
   size?: number;
 };
 
-export function BubblePin({ initials, color, userId, userName, className, size = 32 }: BubblePinProps) {
-  const finalColor = color || getUserAvatarColor(userId, userName);
+export function BubblePin({ initials, userId, userName, className, size = 32 }: BubblePinProps) {
+  const finalColor = getUserAvatarColor(userId, userName);
   
   return (
     <div 

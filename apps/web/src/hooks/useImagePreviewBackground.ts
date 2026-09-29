@@ -5,13 +5,19 @@ type Args = {
   src?: string | null;
   mime_type?: string | null;
   type?: string | null;
+  analyze?: boolean;
 };
 
-export function useImagePreviewBackground({ src, mime_type, type }: Args) {
+export function useImagePreviewBackground({ src, mime_type, type, analyze = true }: Args) {
   const [background, setBackground] = useState<PreviewBackground>(() => getFallbackPreviewBackground({ src, mime_type, type }));
 
   useEffect(() => {
     if (!src) {
+      setBackground(getFallbackPreviewBackground({ src, mime_type, type }));
+      return;
+    }
+
+    if (!analyze) {
       setBackground(getFallbackPreviewBackground({ src, mime_type, type }));
       return;
     }
@@ -26,8 +32,7 @@ export function useImagePreviewBackground({ src, mime_type, type }: Args) {
     return () => {
       cancelled = true;
     };
-  }, [mime_type, src, type]);
+  }, [analyze, mime_type, src, type]);
 
   return background;
 }
-

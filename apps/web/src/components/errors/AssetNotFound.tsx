@@ -7,7 +7,7 @@ interface AssetNotFoundProps {
   workspaceId?: string;
   projectId?: string;
   assetId?: string;
-  error?: "not_found" | "access_denied" | "unknown";
+  error?: "not_found" | "access_denied" | "revoked" | "expired" | "unknown";
   onRetry?: () => void;
 }
 
@@ -38,9 +38,21 @@ export default function AssetNotFound({
           title: "Access Denied",
           description: "You don't have permission to view this asset. Contact your workspace administrator if you believe this is an error.",
         };
+      case "revoked":
+        return {
+          icon: <AlertTriangle className="h-12 w-12 text-amber-500" />,
+          title: "Link Revoked",
+          description: "This share link has been revoked by its owner. Ask them for a new link if you still need access.",
+        };
+      case "expired":
+        return {
+          icon: <AlertTriangle className="h-12 w-12 text-amber-500" />,
+          title: "Link Expired",
+          description: "This share link has expired. Ask its owner for a new one if you still need access.",
+        };
       case "not_found":
         return {
-          icon: <FileX className="h-12 w-12 text-slate-400" />,
+          icon: <FileX className="h-12 w-12 text-muted-foreground" />,
           title: "Asset Not Found", 
           description: "This asset doesn't exist or has been deleted. It may have been removed by a workspace administrator.",
         };
@@ -100,8 +112,8 @@ export default function AssetNotFound({
         </div>
 
         {assetId && (
-          <div className="mt-4 p-3 bg-slate-50 rounded-lg">
-            <p className="text-xs text-slate-500">
+          <div className="mt-4 p-3 bg-muted rounded-lg">
+            <p className="text-xs text-muted-foreground">
               Asset ID: <code className="font-mono">{assetId}</code>
             </p>
           </div>

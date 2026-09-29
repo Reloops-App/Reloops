@@ -1,212 +1,207 @@
-import React, { useState, useEffect } from "react";
-import { X, CheckCircle, AlertCircle, FileVideo, Image as ImageIcon, Loader2, FileText, UploadCloud } from "lucide-react";
-import { formatBytes, UploadItem } from "../file-upload-utils";
+import React from "react";
+import {
+    X,
+    CheckCircle,
+    AlertCircle,
+    FileVideo,
+    Image as ImageIcon,
+    Loader2,
+    FileText,
+    UploadCloud,
+    MoreHorizontal,
+} from "lucide-react";
+import { formatBytes, formatDuration, formatTransferRate, UploadItem } from "../file-upload-utils";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
+import { getFileTypeVisual } from "@/lib/designFiles";
+import { FILE_TYPE_KIND_COLOR_CLASS, FILE_TYPE_KIND_ICONS } from "@/lib/fileTypeVisuals";
+
+function uploadStatusLabel(item: UploadItem) {
+    if (item.status === "error") return "Upload failed";
+    if (item.status === "canceled") return "Canceled";
+    if (item.status === "completed") return "Upload complete";
+    if (item.phase === "prepare") return "Preparing...";
+    if (item.phase === "finalize" || item.phase === "processing") return "Processing...";
+    if (item.phase === "thumbnail") return "Generating thumbnail...";
+    return "Uploading...";
+}
+
+function UploadFileIcon({ item }: { item: UploadItem }) {
+    if (item.status === "error") return <AlertCircle className="h-4 w-4 text-red-400" />;
+    if (item.status === "completed") return <CheckCircle className="h-4 w-4 text-emerald-400" />;
+    if (item.phase === "thumbnail" || item.phase === "prepare" || item.phase === "finalize" || item.phase === "processing") {
+        return <Loader2 className="h-4 w-4 animate-spin text-primary" />;
+    }
+    if (item.type.startsWith("video/")) return <FileVideo className="h-4 w-4 text-primary" />;
+    if (item.type.startsWith("image/")) return <ImageIcon className="h-4 w-4 text-primary" />;
+    const fileTypeVisual = getFileTypeVisual({ type: item.type, name: item.name });
+    if (fileTypeVisual) {
+        const FileTypeIcon = FILE_TYPE_KIND_ICONS[fileTypeVisual.kind];
+        return <FileTypeIcon className={cn("h-4 w-4", FILE_TYPE_KIND_COLOR_CLASS[fileTypeVisual.kind])} />;
+    }
+    return <FileText className="h-4 w-4 text-primary" />;
+}
 
 export const UploadProgressCard = React.memo(({
     item,
     onCancel,
+    entranceDelay = 0,
 }: {
     item: UploadItem;
     onCancel: (id: string) => void;
+    entranceDelay?: number;
 }) => {
     const isError = item.status === "error";
     const isCanceled = item.status === "canceled";
     const isDone = item.status === "completed";
-    const isPreparing = item.phase === "prepare";
-    const isThumbnailing = item.phase === "thumbnail";
-    const isProcessing = item.phase === "processing" || item.phase === "finalize";
+    const isActive = !isDone && !isError && !isCanceled;
     const relativeSegments = (item.relativePath ?? "").split("/").filter(Boolean);
     const folderPath = relativeSegments.length > 1 ? relativeSegments.slice(0, -1).join(" / ") : null;
-    const isFolderUpload = Boolean(folderPath);
+    const statusLabel = uploadStatusLabel(item);
+    const [now, setNow] = React.useState(() => Date.now());
+    const progressValue = Math.max(0, Math.min(item.progress || 0, 100));
+    const uploadedBytes = Math.max(0, Math.min(
+        item.size,
+        item.uploadedBytes ?? Math.floor((item.size * progressValue) / 100)
+    ));
+    const elapsedMs = item.uploadStartedAt ? Math.max(0, (item.uploadFinishedAt ?? now) - item.uploadStartedAt) : 0;
+    const transferRate = elapsedMs > 0 && uploadedBytes > 0 ? uploadedBytes / (elapsedMs / 1000) : 0;
+    const showUploadStats = Boolean(item.uploadStartedAt || uploadedBytes > 0 || isActive);
 
-    const isVid = item.type.startsWith("video/");
-    const isImg = item.type.startsWith("image/");
-
-    const showCircularProgress = isThumbnailing;
-
-    const [speed, setSpeed] = useState<string>("");
-    const [timeLeft, setTimeLeft] = useState<string>("");
-    const [lastProgress, setLastProgress] = useState<{ time: number, bytes: number } | null>(null);
-
-    useEffect(() => {
-        if (item.status !== "uploading") {
-            setSpeed("");
-            setTimeLeft("");
-            return;
-        }
-
-        const now = Date.now();
-        const uploadedBytes = (item.progress / 100) * item.size;
-
-        if (lastProgress && now - lastProgress.time > 2000) {
-            const deltaBytes = uploadedBytes - lastProgress.bytes;
-            const deltaTime = (now - lastProgress.time) / 1000;
-            if (deltaTime > 0) {
-                const bps = deltaBytes / deltaTime;
-                setSpeed(`${formatBytes(bps)}/s`);
-
-                const remaining = item.size - uploadedBytes;
-                const secondsLeft = remaining / bps;
-                if (secondsLeft < 60) setTimeLeft(`${Math.ceil(secondsLeft)}s left`);
-                else setTimeLeft(`${Math.ceil(secondsLeft / 60)}m left`);
-            }
-            setLastProgress({ time: now, bytes: uploadedBytes });
-        } else if (!lastProgress) {
-            setLastProgress({ time: now, bytes: uploadedBytes });
-        }
-    }, [item.progress, item.status, item.size, lastProgress]);
+    React.useEffect(() => {
+        if (!isActive || !item.uploadStartedAt) return;
+        const interval = window.setInterval(() => setNow(Date.now()), 1000);
+        return () => window.clearInterval(interval);
+    }, [isActive, item.uploadStartedAt]);
 
     return (
         <motion.div
             layout
-            initial={{ opacity: 0, scale: 0.9, y: 15 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+            initial={{ opacity: 0, y: 12, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -8, scale: 0.98, transition: { duration: 0.16 } }}
+            transition={{ duration: 0.22, ease: "easeOut", delay: entranceDelay }}
             className={cn(
-                "group relative flex flex-col w-full aspect-[4/3] sm:aspect-auto sm:h-[180px] rounded-[1.25rem] border bg-card/90 backdrop-blur-xl shadow-lg overflow-hidden transition-all duration-500",
-                isError ? "border-red-500/40 shadow-red-500/10" : "border-border/40",
-                isDone ? "border-green-500/40 shadow-green-500/10" : "",
-                !isDone && !isError && !isCanceled && "border-primary/30 shadow-[0_8px_30px_rgba(var(--primary),0.12)] hover:shadow-[0_8px_40px_rgba(var(--primary),0.2)]"
+                "group relative m-0 flex min-w-0 flex-col overflow-hidden rounded-xl border bg-card p-0 shadow-sm transition-[border-color,box-shadow,background-color] duration-200",
+                isError ? "border-red-500/45 bg-red-950/10 shadow-red-500/10" : "border-border/70",
+                isDone && "border-emerald-500/45 shadow-emerald-500/10",
+                isActive && "border-primary/25 shadow-primary/5",
             )}
         >
-            {/* Glowing active state */}
-            {!isDone && !isError && !isCanceled && (
-                <div className="absolute inset-0 z-0 pointer-events-none rounded-[1.25rem] ring-1 ring-inset ring-primary/20 animate-pulse" />
-            )}
-
-            {/* Background Image / Gradient */}
-            <div className="absolute inset-0 z-0 overflow-hidden">
+            <div className="relative h-[156px] shrink-0 overflow-hidden rounded-b-none rounded-t-xl bg-muted/30">
                 {item.coverUrl ? (
-                    <>
-                        <img src={item.coverUrl} className="w-full h-full object-cover opacity-50 transition-transform duration-700 group-hover:scale-110" alt="" />
-                        <div className="absolute inset-0 bg-gradient-to-t from-background/95 via-background/70 to-background/20" />
-                    </>
+                    <motion.img
+                        src={item.coverUrl}
+                        alt=""
+                        className="h-full w-full object-cover"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ duration: 0.22 }}
+                    />
                 ) : (
-                    <div className="w-full h-full bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-primary/10 via-background/50 to-background opacity-90" />
+                    <div className="h-full w-full overflow-hidden bg-muted dark:bg-[#252b3f]">
+                        <div className="absolute inset-0 bg-[linear-gradient(110deg,transparent_0%,rgba(255,255,255,0.07)_42%,transparent_72%)] animate-[slide-right-scan_1.65s_ease-in-out_infinite]" />
+                        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,rgba(124,94,255,0.16),transparent_32%)]" />
+                    </div>
                 )}
+
+                <div className="absolute left-2 top-2 rounded-md border border-white/10 bg-black/35 p-1.5 text-white/45 backdrop-blur-sm">
+                    <span className="block h-3.5 w-3.5 rounded-sm border border-current" />
+                </div>
+
+                <div className="absolute right-2 top-2 rounded-full border border-white/10 bg-black/35 p-1.5 text-white/45 backdrop-blur-sm">
+                    <MoreHorizontal className="h-4 w-4" />
+                </div>
+
+                {isActive ? (
+                    <div className="absolute inset-x-3 bottom-3 overflow-hidden rounded-full border border-white/10 bg-black/35 p-1 backdrop-blur-sm">
+                        <div className="relative h-1.5 overflow-hidden rounded-full bg-white/10">
+                            <motion.div
+                                className="absolute inset-y-0 left-0 rounded-full bg-primary/85"
+                                initial={false}
+                                animate={{ width: `${progressValue}%` }}
+                                transition={{ duration: 0.18, ease: "easeOut" }}
+                            />
+                        </div>
+                    </div>
+                ) : null}
+
+                {isDone ? (
+                    <motion.div
+                        className="absolute inset-0 border-2 border-emerald-400/35"
+                        initial={{ opacity: 0.85 }}
+                        animate={{ opacity: 0 }}
+                        transition={{ duration: 0.65, ease: "easeOut" }}
+                    />
+                ) : null}
             </div>
 
-            {/* Content Container */}
-            <div className="relative z-10 flex flex-col h-full p-4">
-                {/* Header */}
-                <div className="flex justify-between items-start mb-auto">
-                    <div className={cn(
-                        "p-2.5 rounded-xl bg-background/60 backdrop-blur-md border border-white/5 shadow-sm",
-                        showCircularProgress && "p-3 rounded-2xl"
-                    )}>
-                        {isError ? <AlertCircle className="size-5 text-red-500" /> :
-                         isDone ? <CheckCircle className="size-5 text-green-500" /> :
-                         showCircularProgress ? (
-                           <div className="relative flex size-11 items-center justify-center rounded-full border border-amber-500/20 bg-amber-500/10 shadow-[0_0_0_1px_rgba(251,191,36,0.12),0_12px_24px_rgba(251,191,36,0.12)]">
-                             <div className="absolute inset-0 rounded-full border-[3px] border-amber-500/15" />
-                             <Loader2 className="size-5 animate-spin text-amber-500" />
-                           </div>
-                         ) :
-                         isPreparing || isProcessing ? <Loader2 className="size-5 text-amber-500 animate-spin" /> :
-                         isVid ? <FileVideo className="size-5 text-primary" /> : 
-                         isImg ? <ImageIcon className="size-5 text-primary" /> : 
-                         <FileText className="size-5 text-primary" />}
+            <div className="flex min-h-[112px] flex-col gap-3 p-3">
+                <div className="min-w-0">
+                    <p className={cn("truncate text-sm font-semibold leading-tight text-foreground", isError && "text-red-700 dark:text-red-300")}>
+                        {item.name}
+                    </p>
+                    <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+                        <UploadFileIcon item={item} />
+                        <span className={cn("truncate", isError && "text-red-700 dark:text-red-300", isDone && "text-emerald-700 dark:text-emerald-300")}>
+                            {statusLabel}
+                        </span>
                     </div>
-                    
-                    {!isDone && !isError && !isCanceled && (
+                    {folderPath ? (
+                        <p className="mt-1 flex min-w-0 items-center gap-1 truncate text-[11px] text-muted-foreground/75">
+                            <UploadCloud className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{folderPath}</span>
+                        </p>
+                    ) : null}
+                </div>
+
+                <div className={cn(
+                    "mt-auto rounded-lg border border-border/55 bg-muted/25 px-2.5 py-2 text-xs text-muted-foreground",
+                    !isDone && !isError && !isCanceled && "pr-9"
+                )}>
+                    {showUploadStats ? (
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="min-w-0 truncate tabular-nums">
+                                    {formatBytes(uploadedBytes)} / {formatBytes(item.size)}
+                                </span>
+                                <span className="shrink-0 tabular-nums">{progressValue}%</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="truncate">Time spent</span>
+                                <span className="shrink-0 tabular-nums">{formatDuration(elapsedMs)}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="truncate">Rate</span>
+                                <span className="shrink-0 tabular-nums">{formatTransferRate(transferRate)}</span>
+                            </div>
+                        </div>
+                    ) : (
+                        <span className="block truncate">{formatBytes(item.size)}</span>
+                    )}
+                    {!isDone && !isError && !isCanceled ? (
                         <Button
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8 rounded-full bg-background/40 hover:bg-red-500/20 hover:text-red-500 backdrop-blur-md transition-all opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100"
+                            className="absolute bottom-2 right-2 h-6 w-6 shrink-0 rounded-full bg-background/80 text-muted-foreground shadow-sm hover:bg-red-500/15 hover:text-red-700 dark:hover:text-red-300"
                             onClick={() => onCancel(item.id)}
                             title="Cancel upload"
                         >
-                            <X className="size-4" />
+                            <X className="h-3.5 w-3.5" />
                         </Button>
-                    )}
+                    ) : null}
                 </div>
 
-                {/* Info & Progress */}
-                <div className="mt-4 space-y-3.5">
-                    <div>
-                        <p className={cn("text-sm font-semibold leading-tight truncate text-foreground shadow-sm", isError && "text-red-500")}>
-                            {item.name}
-                        </p>
-                        {isFolderUpload && (
-                            <p className="text-[10px] text-muted-foreground mt-0.5 truncate flex items-center gap-1">
-                                <UploadCloud className="size-3" /> {folderPath}
-                            </p>
-                        )}
-                        <div className="flex justify-between items-center mt-1.5">
-                            <p className="text-[11px] text-muted-foreground/80 font-medium tracking-wide">
-                                {formatBytes(item.size)} {speed && `• ${speed}`}
-                            </p>
-                            {/* Phase/Time Text */}
-                            <AnimatePresence mode="wait">
-                                {(isPreparing || isProcessing || isThumbnailing || item.status === "uploading") && (
-                                    <motion.p 
-                                        key={item.phase}
-                                        initial={{ opacity: 0, y: 5 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -5 }}
-                                        className="text-[11px] font-bold text-primary tracking-wide"
-                                    >
-                                        {item.phase === "prepare" ? "PREPARING..." :
-                                         item.phase === "upload" ? (timeLeft ? timeLeft.toUpperCase() : "UPLOADING...") :
-                                         item.phase === "finalize" ? "FINALIZING..." :
-                                         item.phase === "thumbnail" ? "PROCESSING THUMBNAIL..." : "PROCESSING..."}
-                                    </motion.p>
-                                )}
-                            </AnimatePresence>
-                        </div>
-                    </div>
-
-                    {/* Progress Bar */}
-                    {showCircularProgress ? (
-                        <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-amber-500/15 bg-amber-500/5 px-4 py-5 text-center">
-                            <div className="relative flex size-16 items-center justify-center rounded-full border border-amber-500/20 bg-background/70 shadow-[0_0_0_1px_rgba(251,191,36,0.08),0_12px_30px_rgba(251,191,36,0.12)]">
-                                <div className="absolute inset-0 rounded-full border-[4px] border-amber-500/12" />
-                                <Loader2 className="size-7 animate-spin text-amber-500" />
-                            </div>
-                            <div className="space-y-0.5">
-                                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-500">
-                                    Processing thumbnail
-                                </p>
-                                <p className="text-[11px] text-muted-foreground">
-                                    Finalizing preview for this file
-                                </p>
-                            </div>
-                        </div>
-                    ) : !isCanceled && !isDone && !isError && (
-                        <div className="relative h-2 w-full bg-muted/40 rounded-full overflow-hidden backdrop-blur-md border border-white/5 shadow-inner">
-                            <motion.div
-                                className={cn(
-                                    "absolute top-0 left-0 h-full rounded-full relative overflow-hidden",
-                                    isPreparing ? "bg-sky-500" :
-                                    isProcessing ? "bg-amber-500" : "bg-primary"
-                                )}
-                                initial={{ width: "0%" }}
-                                animate={{ width: isPreparing || isProcessing ? "100%" : `${item.progress}%` }}
-                                transition={{ type: "spring", stiffness: 60, damping: 15 }}
-                            >
-                                <motion.div
-                                    className="absolute inset-0 w-full h-full bg-gradient-to-r from-transparent via-white/40 to-transparent skew-x-[-20deg]"
-                                    animate={{ x: ["-100%", "200%"] }}
-                                    transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
-                                />
-                            </motion.div>
-                        </div>
-                    )}
-
-                    {/* Error Message */}
-                    {item.errorMessage && (
-                        <motion.p 
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: "auto" }}
-                            className="text-[11px] text-red-500 font-medium leading-tight line-clamp-2 bg-red-500/10 p-2.5 rounded-lg border border-red-500/20"
-                        >
-                            {item.errorMessage}
-                        </motion.p>
-                    )}
-                </div>
+                {item.errorMessage ? (
+                    <motion.p
+                        initial={{ opacity: 0, y: -3 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="rounded-lg border border-red-500/20 bg-red-500/10 p-2 text-[11px] font-medium leading-snug text-red-700 dark:text-red-300"
+                    >
+                        {item.errorMessage}
+                    </motion.p>
+                ) : null}
             </div>
         </motion.div>
     );

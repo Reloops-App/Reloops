@@ -18,6 +18,7 @@ export type Asset = {
   url?: string | null;
   status?: AssetStatus | null | string;
   assigned_to?: string | null;
+  assigned_to_api_key_id?: string | null;
   comments_count?: number;
   updated_at?: string | null;
   updated_by?: string | null;
@@ -26,6 +27,7 @@ export type Asset = {
   tags?: string[];
   smart_tags?: string[];
   smart_description?: string | null;
+  ai_metadata?: Record<string, unknown> | null;
 };
 
 export const STATUS_STYLES: Record<

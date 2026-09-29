@@ -89,23 +89,36 @@ export function groupByRoot<T extends { id: string; parent_asset_id?: string | n
 export function topOfStack<T>(stack: T[]) { return stack[0]; }
 
 import { toast } from "sonner";
+import { resolveAssetFileUrl } from "@/lib/assetFileUrl";
+import { storagePathFromPublicAssetUrl } from "@/lib/privateAssetUrl";
 
-export async function downloadFile(url: string, fileName: string, options?: { silent?: boolean }) {
+export async function downloadFile(url: string, fileName: string, options?: { silent?: boolean; fallbackUrl?: string | null }) {
   const silent = options?.silent ?? false;
   const toastId = silent ? null : toast.loading(`Starting download: ${fileName}...`);
+  const candidates = Array.from(new Set([url, options?.fallbackUrl].filter((value): value is string => Boolean(value))));
+  let lastUrl = candidates[0] ?? url;
   try {
-    // Try to hint the proxy to force download even in fetch
-    const fetchUrl = url.includes("?") ? `${url}&download=1` : `${url}?download=1`;
+    let blob: Blob | null = null;
+    for (const candidate of candidates) {
+      lastUrl = candidate;
+      try {
+        const sourceUrl = await resolveAssetFileUrl(candidate);
+        // Try to hint the proxy to force download even in fetch
+        const fetchUrl = sourceUrl.includes("?") ? `${sourceUrl}&download=1` : `${sourceUrl}?download=1`;
+        const response = await fetch(fetchUrl, {
+          method: "GET",
+          mode: "cors",
+          credentials: "omit",
+        });
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        blob = await response.blob();
+        break;
+      } catch (error) {
+        console.error("Download attempt failed:", { url: candidate, error });
+      }
+    }
 
-    const response = await fetch(fetchUrl, {
-      method: "GET",
-      mode: "cors",
-      credentials: "omit",
-    });
-
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-    const blob = await response.blob();
+    if (!blob) throw new Error("All download attempts failed");
     const blobUrl = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = blobUrl;
@@ -123,10 +136,29 @@ export async function downloadFile(url: string, fileName: string, options?: { si
     console.error("Download failed:", error);
     // Fallback if fetch fails (e.g. CORS or network error)
     // Try to hint the proxy to force download if it supports it
-    const fallbackUrl = url.includes("?") ? `${url}&download=1` : `${url}?download=1`;
+    const fallbackUrl = lastUrl.includes("?") ? `${lastUrl}&download=1` : `${lastUrl}?download=1`;
     window.open(fallbackUrl, "_blank");
     if (!silent) {
       toast.info("Opening in new tab (Download should start automatically)", { id: toastId ?? undefined });
     }
   }
+}
+
+/**
+ * Touch-safe download (ported from cloud). On a phone/tablet (`hover: none`), a
+ * fetched-blob `<a download>` is unreliable and an async `window.open` is blocked
+ * once the tap gesture is spent, so open the URL synchronously instead. OSS: a
+ * member's public-assets URL must be signed first (private bucket), which is
+ * async, so those still go through `downloadFile`.
+ */
+export function downloadAsset(url: string, fileName: string, options?: { silent?: boolean; fallbackUrl?: string | null }) {
+  if (!url) return;
+  const isTouch = typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia("(hover: none)").matches;
+  if (isTouch && !storagePathFromPublicAssetUrl(url, import.meta.env.VITE_ASSET_PUBLIC_BASE_URL)) {
+    window.open(url.includes("?") ? `${url}&download=1` : `${url}?download=1`, "_blank", "noopener");
+    return;
+  }
+  void downloadFile(url, fileName, options);
 }

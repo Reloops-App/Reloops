@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { resolveAssetFileUrl } from "@/lib/assetFileUrl";
 
 export type ArchiveEntry = {
   path: string;
@@ -48,7 +49,7 @@ export async function downloadZipArchive(
       toast.loading(`Preparing ZIP for ${label} (${index + 1}/${entries.length})...`, { id: toastId });
 
       try {
-        const response = await fetch(withDownloadHint(entry.url), {
+        const response = await fetch(withDownloadHint(await resolveAssetFileUrl(entry.url)), {
           method: "GET",
           mode: "cors",
           credentials: "omit",

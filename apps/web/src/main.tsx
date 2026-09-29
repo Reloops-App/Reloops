@@ -16,6 +16,8 @@ import ReviewAsset from "./pages/Review/ReviewAsset";
 import ShareAsset from "./pages/Review/ShareAsset";
 import ShareCollection from "./pages/Review/ShareCollection";
 import ShareCollectionAsset from "./pages/Review/ShareCollectionAsset";
+import ShareProject from "./pages/Review/ShareProject";
+import ShareProjectAsset from "./pages/Review/ShareProjectAsset";
 import { Toaster } from "./components/ui/sonner";
 import Teams from "./pages/OrgTeams/Teams";
 import AcceptInvitation from "./pages/Invitation/AcceptInvitation";
@@ -56,6 +58,8 @@ createRoot(document.getElementById("root")!).render(
         <Route path="/share/:token" element={<ShareAsset />} />
         <Route path="/share/collection/:token" element={<ShareCollection />} />
         <Route path="/share/collection/:token/asset/:assetId" element={<ShareCollectionAsset />} />
+        <Route path="/share/project/:token" element={<ShareProject />} />
+        <Route path="/share/project/:token/asset/:assetId" element={<ShareProjectAsset />} />
         <Route path="/accept-invitation" element={<AcceptInvitation />} />
         <Route path="*" element={<div>404 Not Found</div>} />
       </Routes>

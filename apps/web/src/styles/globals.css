@@ -220,3 +220,26 @@
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+
+/* Waiting tile: a circle that shrinks and grows around the file-type icon while the server makes the picture. */
+@keyframes tile-breathe {
+  0%, 100% {
+    transform: scale(0.55);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-tile-breathe {
+  animation: tile-breathe 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-tile-breathe {
+    animation: none;
+    opacity: 0.85;
+  }
+}

@@ -362,7 +362,7 @@ export default function ShareAsset() {
 
     return (
         <div className="flex flex-col h-screen">
-            <ShareAuthDialog open={identityPromptOpen && !identity} onIdentify={handleIdentity} />
+            <ShareAuthDialog open={identityPromptOpen && !identity} onIdentify={handleIdentity} onClose={() => setIdentityPromptOpen(false)} />
 
             <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex-shrink-0">
                 <div className="flex h-14 items-center gap-3 px-3">
@@ -419,7 +419,7 @@ export default function ShareAsset() {
                         <VideoPlayerWithAnnotations
                             title={asset?.title}
                             videoUrl={reviewImageUrl}
-                            poster={asset?.cover_image_url}
+                            poster={asset?.cover_image_url ?? undefined}
                             annotations={playerAnnotations}
                             onAddAnnotation={handleAddAnnotation}
                         />
@@ -430,7 +430,7 @@ export default function ShareAsset() {
                             annotations={playerAnnotations}
                             onAddAnnotation={handleAddAnnotation}
                             assetId={asset?.id}
-                            asset={asset}
+                            asset={asset as any}
                         />
                     ) : isUnsupportedDesignPreview ? (
                         <UnsupportedAssetPreview

@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 import { normalizeAssets } from "@/lib/assetUtils";
+import { resolveAssetFileUrl } from "@/lib/assetFileUrl";
 import {
   apiKeyActorProfileId,
   loadApiKeyActorProfiles,
@@ -97,7 +98,8 @@ export default function CompareVersionsPage() {
           version_no: a.version || a.__raw?.version_no,
         }));
 
-        if (mounted) setVersions(mapped);
+        const resolved = await Promise.all(mapped.map(async (version) => ({ ...version, src: version.src ? await resolveAssetFileUrl(version.src) : version.src })));
+        if (mounted) setVersions(resolved);
 
         // Fetch comments for all these versions
         const versionIds = data ? (data as VersionRow[]).map((d) => d.id) : [];

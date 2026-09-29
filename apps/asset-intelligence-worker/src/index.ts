@@ -325,6 +325,22 @@ function mediaUrl(storagePath: string | null): string | null {
   return `${ASSET_SOURCE_BASE_URL.replace(/\/+$/, "")}/${storagePath.replace(/^\/+/, "")}`;
 }
 
+// The `assets` bucket is private, so the public source URL 400s. Sign with the service role.
+async function signedMediaUrl(storagePath: string | null): Promise<string | null> {
+  if (!storagePath) return null;
+  const objectPath = storagePath.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
+  try {
+    const { signedURL } = await supabaseJson<{ signedURL?: string }>(`/storage/v1/object/sign/assets/${objectPath}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expiresIn: 60 * 60 }),
+    });
+    return signedURL ? `${supabaseBaseUrl()}/storage/v1${signedURL}` : null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeAsset(row: AssetRow): NormalizedAsset {
   const mimeType = row.mime_type ?? mimeFromPath(row.storage_path);
   return {
@@ -612,7 +628,9 @@ async function analyze(asset: NormalizedAsset): Promise<AnalysisResult> {
 
 async function processJob(job: DbJob) {
   try {
-    const asset = normalizeAsset(await fetchAsset(job.asset_id));
+    const row = await fetchAsset(job.asset_id);
+    const asset = normalizeAsset(row);
+    asset.mediaUrl = (await signedMediaUrl(row.storage_path)) ?? asset.mediaUrl;
     const result = await analyze(asset);
     await writeAssetMetadata(asset.id, result);
     await writeAssetHistory(asset, result);

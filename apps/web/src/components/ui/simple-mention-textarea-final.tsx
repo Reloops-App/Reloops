@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { useMentionableUsers, type MentionableUser } from '@/hooks/useMentionableUsers';
 import { convertMentionsForDisplay, parseMentions } from '@/lib/mentionUtils';
 import { getMentionCSSColor } from '@/lib/mentionColors';
+import { getAvatarInitials } from '@/lib/avatar-utils';
 
 interface SimpleMentionTextareaFinalProps {
   value?: string;
@@ -20,6 +21,13 @@ interface SimpleMentionTextareaFinalProps {
   placement?: 'top' | 'bottom';
   maxHeight?: number | string; // New prop for controlling max height
   disabled?: boolean;
+  /**
+   * When provided, use this list of mentionable people verbatim instead of
+   * loading via `useMentionableUsers`. Used by the guest share flow, where
+   * there's no session to fetch the workspace member list — the pool is
+   * "people already in this comment thread".
+   */
+  usersOverride?: MentionableUser[];
 }
 
 const SimpleMentionTextareaFinal = React.forwardRef<HTMLTextAreaElement, SimpleMentionTextareaFinalProps>(
@@ -36,6 +44,7 @@ const SimpleMentionTextareaFinal = React.forwardRef<HTMLTextAreaElement, SimpleM
     assetId,
     placement = 'bottom',
     maxHeight,
+    usersOverride,
     ...props
   }, ref) => {
     const [showDropdown, setShowDropdown] = useState(false);
@@ -56,15 +65,18 @@ const SimpleMentionTextareaFinal = React.forwardRef<HTMLTextAreaElement, SimpleM
       if (newDisplayValue !== displayValue) {
         setDisplayValue(newDisplayValue);
       }
-    }, [value]);
+    }, [displayValue, value]);
 
-    // Load mentionable users
-    const { users, loading, error } = useMentionableUsers({
+    // Load mentionable users (skipped when the caller supplies its own list).
+    const hookResult = useMentionableUsers({
       projectId,
       organizationId,
       workspaceId,
       assetId,
     });
+    const users = usersOverride ?? hookResult.users;
+    const loading = usersOverride ? false : hookResult.loading;
+    const error = usersOverride ? null : hookResult.error;
 
     // Filter users based on query
     const filteredUsers = mentionQuery
@@ -84,8 +96,6 @@ const SimpleMentionTextareaFinal = React.forwardRef<HTMLTextAreaElement, SimpleM
 
       // 1. Measure content without resetting height if possible
       // to avoid layout thrashing.
-      const currentHeight = textarea.style.height;
-      
       // We only reset to auto to measure the TRUE scrollHeight 
       // when deleting or clearing.
       if (forceShrink || textarea.value === "") {
@@ -428,7 +438,10 @@ const SimpleMentionTextareaFinal = React.forwardRef<HTMLTextAreaElement, SimpleM
                 start: number,
                 end: number,
                 text: string,
-                data?: any
+                data?: {
+                  id: string;
+                  displayName: string;
+                }
               }> = [];
 
               // Find mentions
@@ -484,7 +497,7 @@ const SimpleMentionTextareaFinal = React.forwardRef<HTMLTextAreaElement, SimpleM
                 }
 
                 if (item.type === 'mention') {
-                  const colors = getMentionCSSColor(item.data.id);
+                  const colors = getMentionCSSColor(item.data!.id);
                   parts.push(
                     <span
                       key={`mention-${idx}`}
@@ -544,74 +557,96 @@ const SimpleMentionTextareaFinal = React.forwardRef<HTMLTextAreaElement, SimpleM
         {showDropdown && typeof window !== 'undefined' && createPortal(
           <div
             ref={dropdownRef}
-            className="fixed bg-slate-800 border border-slate-600 rounded-lg shadow-xl z-[99999] max-h-56 overflow-y-auto"
+            className={cn(
+              "fixed z-[99999] max-h-64 overflow-y-auto rounded-xl border border-border dark:border-white/10 bg-popover dark:bg-[#111827]/98 p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.45)] ring-1 ring-border dark:ring-white/[0.03] backdrop-blur-xl",
+              "[scrollbar-width:thin] [scrollbar-color:rgba(148,163,184,0.55)_transparent]",
+              "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent",
+              "[&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border dark:[&::-webkit-scrollbar-thumb]:bg-slate-500/45",
+              "hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/40 dark:hover:[&::-webkit-scrollbar-thumb]:bg-slate-400/65"
+            )}
             style={{
               top: `${dropdownPosition.top}px`,
               left: `${dropdownPosition.left}px`,
               width: `${dropdownPosition.width}px`,
-              minWidth: '300px'
+              minWidth: '320px',
+              maxWidth: 'calc(100vw - 24px)'
             }}
           >
-            <div className="p-1">
+            <div className="space-y-1">
               {loading && (
-                <div className="p-3 text-slate-400 text-sm text-center">
+                <div className="rounded-lg px-3 py-4 text-center text-sm text-muted-foreground dark:text-slate-400">
                   Loading users...
                 </div>
               )}
 
               {error && (
-                <div className="p-3 text-red-400 text-sm text-center">
+                <div className="rounded-lg border border-red-400/15 bg-red-400/8 px-3 py-4 text-center text-sm text-red-700 dark:text-red-300">
                   Error loading users
                 </div>
               )}
 
               {!loading && !error && filteredUsers.length === 0 && (
-                <div className="p-3 text-slate-400 text-sm text-center">
+                <div className="rounded-lg px-3 py-4 text-center text-sm text-muted-foreground dark:text-slate-400">
                   No users found
                 </div>
               )}
 
               {!loading && !error && filteredUsers.map((user, index) => {
-                // Show color preview for the user
                 const colors = getMentionCSSColor(user.id);
+                const displayName = user.display_name || user.id;
+                const isSelected = index === selectedIndex;
 
                 return (
                   <div
                     key={user.id}
+                    role="option"
+                    aria-selected={isSelected}
                     className={cn(
-                      "flex items-center gap-3 p-2 rounded cursor-pointer text-sm transition-colors",
-                      index === selectedIndex
-                        ? "bg-blue-500 text-white shadow-md"
-                        : "text-slate-300 hover:bg-slate-700 hover:text-white"
+                      "flex cursor-pointer items-center gap-3 rounded-lg border px-2.5 py-2.5 text-sm transition-all",
+                      isSelected
+                        ? "border-cyan-300/20 bg-cyan-300/12 text-popover-foreground dark:text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                        : "border-transparent text-muted-foreground dark:text-slate-300 hover:border-border dark:hover:border-white/8 hover:bg-accent dark:hover:bg-white/[0.045] hover:text-accent-foreground dark:hover:text-white"
                     )}
+                    onMouseEnter={() => setSelectedIndex(index)}
                     // Use pointer down to prevent blurring the textarea before click registers
                     onMouseDown={(e) => {
                       e.preventDefault();
                       insertMention(user);
                     }}
                   >
-                    <div className="w-8 h-8 rounded-full bg-slate-600 flex items-center justify-center text-xs font-medium shrink-0">
-                      {user.display_name?.[0]?.toUpperCase() || user.id[0]?.toUpperCase() || '?'}
+                    <div
+                      className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border text-[11px] font-semibold text-white shadow-sm"
+                      style={{
+                        backgroundColor: colors.bg,
+                        borderColor: isSelected ? 'rgba(103,232,249,0.34)' : colors.border,
+                      }}
+                    >
+                      {user.avatar_url ? (
+                        <img src={user.avatar_url} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <span>{getAvatarInitials(displayName)}</span>
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">
-                        {user.display_name || user.id}
+                      <div className="truncate font-semibold leading-5 text-popover-foreground dark:text-slate-100">
+                        {displayName}
                       </div>
                       {user.email && (
-                        <div className="text-xs text-slate-400 truncate">
+                        <div className="truncate text-xs leading-4 text-muted-foreground dark:text-slate-400">
                           {user.email}
                         </div>
                       )}
                     </div>
                     <div
-                      className="text-xs px-2 py-1 rounded font-semibold shrink-0"
+                      className={cn(
+                        "max-w-[42%] shrink-0 truncate rounded-full border px-2.5 py-1 text-[11px] font-semibold leading-none",
+                        isSelected ? "bg-cyan-300/12 text-cyan-700 dark:text-cyan-100" : "bg-accent dark:bg-white/[0.035] text-muted-foreground dark:text-slate-300"
+                      )}
                       style={{
-                        backgroundColor: colors.bg,
-                        color: colors.text,
-                        border: `1px solid ${colors.border}`
+                        borderColor: isSelected ? 'rgba(103,232,249,0.26)' : colors.border,
                       }}
                     >
-                      @{user.display_name || user.id}
+                      @{displayName}
                     </div>
                   </div>
                 );

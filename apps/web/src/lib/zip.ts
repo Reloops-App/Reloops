@@ -1,5 +1,6 @@
 import JSZip from "jszip";
 import type { CollectionAssetRow } from "./collections";
+import { resolveAssetFileUrl } from "./assetFileUrl";
 
 function saveBlob(blob: Blob, fileName: string) {
   const blobUrl = window.URL.createObjectURL(blob);
@@ -33,10 +34,10 @@ export async function downloadCollectionZip(
     
     if (!path) continue;
 
-    const downloadUrl = asset.storage_path ? `${base}${path}` : path;
+    const downloadUrl = String(asset.storage_path ? `${base}${path}` : path);
 
     try {
-      const response = await fetch(downloadUrl);
+      const response = await fetch(await resolveAssetFileUrl(downloadUrl));
       if (!response.ok) throw new Error(`Failed to fetch ${downloadUrl}`);
       const blob = await response.blob();
 

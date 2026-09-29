@@ -79,6 +79,7 @@ import {
 import KanbanBoard from "./components/KanbanBoard";
 import { Asset, AssetStatus, ColumnKey, STATUS_STYLES, toColumnKey } from "./CampaignTypes";
 import ProjectShareLinks from "./components/ProjectShareLinks";
+import { ShareProjectEntryPoint } from "./components/ShareProjectEntryPoint";
 import {
   buildRecursiveFolderAssetCounts,
   mimeKind as utilMimeKind,
@@ -1092,6 +1093,14 @@ export default function CampaignDetails({
   const foldersById = useMemo(() => {
     return new Map(folders.map((folder) => [folder.id, folder]));
   }, [folders]);
+  const topAssetByRootId = useMemo(() => {
+    const next = new Map<string, Asset>();
+    for (const stack of groupByRoot(assets).values()) {
+      const topAsset = stack[0];
+      if (topAsset) next.set(rootIdOf(topAsset), topAsset);
+    }
+    return next;
+  }, [assets]);
 
   const canMoveFolderToParent = React.useCallback((folderId: string, nextParentFolderId: string | null) => {
     if (!folderId) return false;
@@ -1820,7 +1829,38 @@ export default function CampaignDetails({
   }
 
   const [inviteReviewerOpen, setInviteReviewerOpen] = useState(false);
+  const [shareProjectOpen, setShareProjectOpen] = useState(false);
+  const [shareFolderTarget, setShareFolderTarget] = useState<{ id: string; name: string } | null>(null);
+  const [shareSelectionTarget, setShareSelectionTarget] = useState<{
+    folderIds: string[];
+    rootIds: string[];
+    folders: { id: string; name: string }[];
+    files: { id: string; name: string; coverUrl: string | null; type: string }[];
+  } | null>(null);
   const [inviteMemberOpen, setInviteMemberOpen] = useState(false);
+
+  function requestShareFolder(folder: FolderRow) {
+    setShareFolderTarget({ id: folder.id, name: folder.name });
+  }
+
+  function requestShareSelection() {
+    // Resolve real names/thumbnails (not just ids) so the share dialog can
+    // show a visual preview of exactly what's being shared.
+    const folders = selectedFolderIds
+      .map((id) => foldersById.get(id))
+      .filter((folder): folder is FolderRow => Boolean(folder))
+      .map((folder) => ({ id: folder.id, name: folder.name }));
+    const files = selectedRootIds
+      .map((rootId) => {
+        const asset = topAssetByRootId.get(rootId);
+        return asset ? { id: rootId, name: asset.name, coverUrl: asset.coverUrl ?? null, type: asset.type } : null;
+      })
+      .filter((item): item is { id: string; name: string; coverUrl: string | null; type: string } => Boolean(item));
+
+    // Snapshot the current selection so later changes to it don't
+    // retroactively alter an already-open share dialog.
+    setShareSelectionTarget({ folderIds: [...selectedFolderIds], rootIds: [...selectedRootIds], folders, files });
+  }
   const [organizationId, setOrganizationId] = useState<string | null>(null);
   const [reviewers, setReviewers] = useState<ProjectReviewer[]>([]);
   const [loadingReviewers, setLoadingReviewers] = useState(false);
@@ -3884,7 +3924,7 @@ export default function CampaignDetails({
                         <Download className="mr-2 h-4 w-4" />
                         Download
                       </DropdownMenuItem>
-                      <DropdownMenuItem disabled title="Share is unavailable for this selection.">
+                      <DropdownMenuItem disabled={totalSelectedCount === 0} onClick={() => totalSelectedCount > 0 && requestShareSelection()}>
                         <MailPlus className="mr-2 h-4 w-4" />
                         Share
                       </DropdownMenuItem>
@@ -3990,17 +4030,29 @@ export default function CampaignDetails({
                         </p>
                       </DropdownMenuItem>
                       <DropdownMenuItem
-                        className="flex flex-col items-start gap-1 p-3 opacity-80"
-                        disabled
+                        onClick={() => setShareProjectOpen(true)}
+                        className="flex flex-col items-start gap-1 p-3 cursor-pointer"
                       >
                         <div className="font-medium flex items-center gap-2">
-                          <Eye className="h-4 w-4 text-primary" /> Invite Guest Reviewer
-                          <Badge variant="secondary" className="ml-2 text-xs text-muted-foreground">Experimental</Badge>
+                          <Eye className="h-4 w-4 text-primary" /> Share Project
                         </div>
                         <p className="text-xs text-muted-foreground text-left">
-                          Invite a guest to review or view this specific project only.
+                          Share this project with a client or reviewer — no account required.
                         </p>
                       </DropdownMenuItem>
+                      {currentFolder ? (
+                        <DropdownMenuItem
+                          onClick={() => requestShareFolder(currentFolder)}
+                          className="flex flex-col items-start gap-1 p-3 cursor-pointer"
+                        >
+                          <div className="font-medium flex items-center gap-2">
+                            <FolderOpen className="h-4 w-4 text-primary" /> Share This Folder
+                          </div>
+                          <p className="text-xs text-muted-foreground text-left">
+                            Share just this folder — the client only sees files inside it, not the rest of the project.
+                          </p>
+                        </DropdownMenuItem>
+                      ) : null}
                     </DropdownMenuContent>
                   </DropdownMenu>
                   <DropdownMenu>
@@ -5182,6 +5234,20 @@ export default function CampaignDetails({
             await handleSendInvite(emails, message);
             setInviteReviewerOpen(false);
           }}
+        />
+
+        <ShareProjectEntryPoint project={project} open={shareProjectOpen} onOpenChange={setShareProjectOpen} />
+        <ShareProjectEntryPoint
+          project={project}
+          folder={shareFolderTarget}
+          open={Boolean(shareFolderTarget)}
+          onOpenChange={(open) => { if (!open) setShareFolderTarget(null); }}
+        />
+        <ShareProjectEntryPoint
+          project={project}
+          selection={shareSelectionTarget}
+          open={Boolean(shareSelectionTarget)}
+          onOpenChange={(open) => { if (!open) setShareSelectionTarget(null); }}
         />
 
         <InviteOrgMemberDialog

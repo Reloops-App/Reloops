@@ -66,6 +66,39 @@ Deno.serve(async (req) => {
     }
     if (workspaceId && !await isWorkspaceMember(workspaceId, user.id)) return json({ error: "Forbidden" }, { status: 403 });
 
+    // Ported from Reloops cloud: which projects an asset appears in (its primary
+    // project plus any project it is linked into). Used by the review Info panel.
+    if (action === "asset_projects") {
+      const assetId = String(body.asset_id ?? body.assetId ?? body.id ?? "");
+      if (!assetId || !workspaceId) return json({ error: "asset_id required" }, { status: 400 });
+      const { data: asset } = await admin.from("assets").select("id, parent_asset_id, project_id").eq("id", assetId).maybeSingle();
+      if (!asset) return json({ error: "Asset not found" }, { status: 404 });
+
+      const rootId = rootAssetIdOf(asset);
+      const { data: rootAsset } = asset.parent_asset_id
+        ? await admin.from("assets").select("id, project_id").eq("id", rootId).maybeSingle()
+        : { data: asset };
+      const { data: links } = await admin.from("project_asset_links").select("project_id, created_at").eq("asset_root_id", rootId);
+      const primaryProjectId = rootAsset?.project_id ? String(rootAsset.project_id) : (asset.project_id ? String(asset.project_id) : null);
+      const projectIds = Array.from(new Set([primaryProjectId, ...(links ?? []).map((link: any) => String(link.project_id))].filter((id): id is string => Boolean(id))));
+      if (projectIds.length === 0) return json({ data: [] });
+
+      const { data: projects, error: projectsError } = await admin.from("projects").select("id, name, status").in("id", projectIds).neq("status", "deleted");
+      if (projectsError) return json({ error: "Failed to load asset projects" }, { status: 500 });
+      const linkByProjectId = new Map((links ?? []).map((link: any) => [String(link.project_id), link]));
+      const rows = (projects ?? [])
+        .map((project: any) => {
+          const projectId = String(project.id);
+          const isPrimary = primaryProjectId === projectId;
+          return { id: projectId, name: project.name ?? "Untitled project", is_primary: isPrimary, linked_at: isPrimary ? null : linkByProjectId.get(projectId)?.created_at ?? null };
+        })
+        .sort((left: any, right: any) => {
+          if (left.is_primary !== right.is_primary) return left.is_primary ? -1 : 1;
+          return String(left.name).localeCompare(String(right.name));
+        });
+      return json({ data: rows });
+    }
+
     if (action === "list_folders" || action === "list_project_folders") {
       let q = admin.from("folders").select("*").eq("workspace_id", workspaceId).order("name");
       if (body.project_id) q = q.eq("project_id", body.project_id);

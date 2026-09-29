@@ -128,3 +128,57 @@ export function nextVersionForRootFromMap(rootId: string, stacksMap: Map<string,
   );
   return max + 1;
 }
+
+// Ported from Reloops cloud (sorting helpers used by the project share pages).
+const MIME_KIND_SORT_ORDER = ["image", "video", "audio", "pdf", "html5", "text", "application", "other"];
+
+export function compareMimeKinds(leftType?: string | null, rightType?: string | null) {
+  const leftKind = mimeKind(leftType ?? undefined);
+  const rightKind = mimeKind(rightType ?? undefined);
+  const leftRank = MIME_KIND_SORT_ORDER.indexOf(leftKind);
+  const rightRank = MIME_KIND_SORT_ORDER.indexOf(rightKind);
+  const rankedLeft = leftRank === -1 ? MIME_KIND_SORT_ORDER.length : leftRank;
+  const rankedRight = rightRank === -1 ? MIME_KIND_SORT_ORDER.length : rightRank;
+
+  if (rankedLeft !== rankedRight) return rankedLeft - rankedRight;
+
+  return leftKind.localeCompare(rightKind, undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+export function fileExtensionFromAsset(asset: {
+  name?: string | null;
+  title?: string | null;
+  storage_path?: string | null;
+  path?: string | null;
+  url?: string | null;
+  __raw?: Record<string, unknown> | null;
+} | null | undefined) {
+  const raw = asset?.__raw ?? {};
+  const source = asset?.name
+    ?? asset?.title
+    ?? asset?.storage_path
+    ?? asset?.path
+    ?? asset?.url
+    ?? (typeof raw.title === "string" ? raw.title : null)
+    ?? (typeof raw.storage_path === "string" ? raw.storage_path : null)
+    ?? (typeof raw.path === "string" ? raw.path : null)
+    ?? (typeof raw.url === "string" ? raw.url : null)
+    ?? "";
+  const dotIndex = source.lastIndexOf(".");
+  if (dotIndex === -1 || dotIndex === source.length - 1) return "";
+  return source.slice(dotIndex + 1).toLowerCase();
+}
+
+export function compareFileExtensions(
+  leftAsset: Parameters<typeof fileExtensionFromAsset>[0],
+  rightAsset: Parameters<typeof fileExtensionFromAsset>[0],
+) {
+  return fileExtensionFromAsset(leftAsset).localeCompare(fileExtensionFromAsset(rightAsset), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+

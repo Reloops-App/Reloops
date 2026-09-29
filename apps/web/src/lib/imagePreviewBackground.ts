@@ -99,3 +99,13 @@ export async function analyzePreviewBackground(src: string, asset?: PreviewSourc
     return fallback;
   }
 }
+
+// The review/compare canvas is a "theater" surface — kept a fixed dark
+// backdrop regardless of app theme (same reasoning as media player chrome),
+// unlike previewBackgroundClass's grid-card use which follows light/dark.
+export function previewBackgroundClassAlwaysDark(kind: PreviewBackground) {
+  if (kind === "checker") {
+    return "bg-[linear-gradient(45deg,#2c3444_25%,transparent_25%,transparent_75%,#2c3444_75%,#2c3444),linear-gradient(45deg,#232b39_25%,transparent_25%,transparent_75%,#232b39_75%,#232b39)] bg-[position:0_0,8px_8px] bg-[size:16px_16px] bg-[#1b2230]";
+  }
+  return "bg-black";
+}

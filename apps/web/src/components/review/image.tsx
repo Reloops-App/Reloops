@@ -1,26 +1,41 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { Card, CardContent } from "@/components/ui/card";
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from "react";
+import { CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn, downloadFile } from "@/lib/utils";
+import { getRawPreviewInfo } from "@/lib/designFiles";
+import { resolveAssetDownloadUrl, withMediaCorsHint, withMediaTransform, isRealImageAsset, REVIEW_PREVIEW_TRANSFORM } from "@/lib/mediaDelivery";
+import type { CommentMutationContext } from "@/lib/shareGuestIdentity";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
-import { ZoomIn, ZoomOut, Maximize2, Download } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { ZoomIn, ZoomOut, Maximize2, Download, Move, Orbit } from "lucide-react";
 
 import type { Annotation, Stroke } from "./annotator-utils";
-import { drawStrokes, normalizeAnnotation, getAnnotationFocusPoint, getDrawingBounds } from "./annotator-utils";
+import { drawStrokes, normalizeAnnotationList, mergeAnnotationOverrides, getAnnotationFocusPoint, getDrawingBounds } from "./annotator-utils";
 import { useDrawing } from "./shared/useDrawing";
 import CommentsPanel from "./CommentsPanel";
 import { Switch } from "../ui/switch";
-import { getLoggedInUserProfile, supabase } from "@/lib/supabaseClient";
+import { getLoggedInUserProfile } from "@/lib/supabaseClient";
 import { invokeEdgeFunction } from "@/api/edge";
 import { getAvatarInitials } from "@/lib/avatar-utils";
 import { BubblePin } from "./shared/PinMarker";
 import { CommentPopover } from "./shared/CommentPopover";
 import { ReviewModeBar, type ReviewMode } from "./shared/ReviewModeBar";
 import { InlineNoteComposer } from "./shared/InlineNoteComposer";
-import { previewBackgroundClass, type PreviewBackground } from "@/lib/imagePreviewBackground";
+import { previewBackgroundClassAlwaysDark, type PreviewBackground } from "@/lib/imagePreviewBackground";
+import { useDraggablePin } from "./shared/useDraggablePin";
+import { useMeasuredSize } from "./shared/useMeasuredSize";
+import { clampOverlayPosition } from "./shared/overlayPosition";
+import { lazyRoute } from "@/lib/lazyRoute";
 
+// Loaded lazily so the ~150-300KB three.js/Photo Sphere Viewer bundle is only
+// fetched once someone actually views a panoramic asset in 360 mode, not on
+// every image view.
+const Panorama360Viewer = lazyRoute(() => import("@/components/review/Panorama360Viewer"));
+
+const DRAFT_PIN_ID = "__draft-anchor__";
 const DEFAULT_ANNOTATION_COLOR = "#35c8d6";
+const ANNOTATION_STROKE_WIDTH = 6;
+const ANNOTATION_ARROW_HEAD_SIZE = 9;
+const MIN_ANNOTATION_VISUAL_SCALE = 0.05;
 
 function getAnnotationAccentColor(annotation: Annotation) {
   return annotation.drawing?.find((stroke) => stroke.color)?.color ?? DEFAULT_ANNOTATION_COLOR;
@@ -30,12 +45,32 @@ function createAnchorStroke(point: { x: number; y: number }, strokeColor: string
   return { tool: "pen", color: strokeColor, points: [point] };
 }
 
+export function isReviewUiTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      [
+        "button",
+        "a",
+        "input",
+        "textarea",
+        "select",
+        "[contenteditable='true']",
+        "[role='button']",
+        "[role='menuitem']",
+        "[data-review-ui='true']",
+      ].join(",")
+    )
+  );
+}
+
 /* ----------------------------- Inline CanvasOverlay ----------------------------- */
 
 type OverlayProps = {
   targetRef: React.RefObject<HTMLElement>; // natural-size overlay (transformed with image)
   annotating: boolean;
   strokes: Stroke[];                       // LIVE strokes only (draft + active)
+  visualScale: number;
   naturalWidth?: number;
   naturalHeight?: number;
   onPointerDown: (e: { x: number; y: number; original: PointerEvent }) => void;
@@ -61,6 +96,7 @@ function CanvasOverlay({
   targetRef,
   annotating,
   strokes,
+  visualScale,
   naturalWidth,
   naturalHeight,
   onPointerDown,
@@ -105,7 +141,9 @@ function CanvasOverlay({
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.lineWidth = 6;
+    const inverseScale = 1 / Math.max(visualScale, MIN_ANNOTATION_VISUAL_SCALE);
+    ctx.lineWidth = ANNOTATION_STROKE_WIDTH * inverseScale;
+    const arrowHeadSize = ANNOTATION_ARROW_HEAD_SIZE * inverseScale;
 
     const w = (naturalWidth ?? parseFloat(canvas.style.width)) || canvas.width;
     const h = (naturalHeight ?? parseFloat(canvas.style.height)) || canvas.height;
@@ -115,7 +153,7 @@ function CanvasOverlay({
     };
     const head = (x0: number, y0: number, x1: number, y1: number) => {
       const angle = Math.atan2(y1 - y0, x1 - x0);
-      const size = 9;
+      const size = arrowHeadSize;
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x1 - size * Math.cos(angle - Math.PI / 6), y1 - size * Math.sin(angle - Math.PI / 6));
@@ -156,7 +194,7 @@ function CanvasOverlay({
         ctx.stroke();
       }
     }
-  }, [strokes, naturalWidth, naturalHeight]);
+  }, [strokes, visualScale, naturalWidth, naturalHeight]);
 
   useEffect(() => {
     redrawLive();
@@ -182,11 +220,11 @@ function CanvasOverlay({
       if (!annotating) return;
       const { x, y } = eventToImagePx(ev, overlay, naturalWidth, naturalHeight);
       onPointerUp({ x, y, original: ev });
-      try { overlay.releasePointerCapture(ev.pointerId); } catch { }
+      try { overlay.releasePointerCapture(ev.pointerId); } catch { return; }
     };
     const cancel = (ev: PointerEvent) => {
       onPointerCancel({ original: ev });
-      try { overlay.releasePointerCapture(ev.pointerId); } catch { }
+      try { overlay.releasePointerCapture(ev.pointerId); } catch { return; }
     };
 
     overlay.addEventListener("pointerdown", down);
@@ -225,7 +263,7 @@ export type ImageAnnotatorProps = {
   title?: string;
   className?: string;
   hideHeader?: boolean;
-  annotations?: Annotation[] | any[];
+  annotations?: Annotation[] | unknown[];
   onAddAnnotation?: (a: Annotation) => void | Promise<void>;
   stageHeight?: number; // fixed viewport height (px)
 
@@ -243,8 +281,6 @@ export type ImageAnnotatorProps = {
     tags?: string[] | null;
     smart_tags?: string[] | null;
     smart_description?: string | null;
-    ai_description?: string | null;
-    ai_metadata?: Record<string, any> | null;
     status?: string | null;
     assigned_to?: string | null;
     uploaded_by?: string | null;
@@ -258,8 +294,24 @@ export type ImageAnnotatorProps = {
     duration_ms?: number | null;
     version_no?: number | null;
     storage_path: string;
+    signed_url?: string | null;
+    delivery_url?: string | null;
+    cdn_url?: string | null;
+    cover_image_url?: string | null;
   } | null;
   onAssetMetadataSave?: (patch: { description: string | null; tags: string[] }) => Promise<void> | void;
+  onRetagAsset?: () => void;
+  retagStatus?: "idle" | "queued" | "error";
+  commentsPanelOpen?: boolean;
+  onCommentsPanelOpenChange?: (open: boolean) => void;
+  commentMutationContext?: CommentMutationContext;
+  // Which edge function edit/delete calls target — defaults to the shared
+  // "comment" function used by every existing caller. A share flow with its
+  // own isolated comment function can point this elsewhere without changing
+  // behavior for anyone else.
+  commentEndpoint?: string;
+  onMediaError?: () => void;
+  fallbackDownloadUrl?: string | null;
   profiles?: Record<string, {
     id: string;
     display_name?: string | null;
@@ -279,16 +331,40 @@ export default function ImageAnnotatorWithAnnotations({
   assetId,
   asset,
   onAssetMetadataSave,
+  onRetagAsset,
+  retagStatus,
+  commentsPanelOpen,
+  commentMutationContext,
+  commentEndpoint = "comment",
+  onMediaError,
+  fallbackDownloadUrl,
   profiles = {},
 }: ImageAnnotatorProps) {
+  // Any image asset can be switched into 360° view -- no detection/heuristic,
+  // the user decides for themselves whether an image is actually a panorama.
+  const canShow360 = Boolean(asset?.mime_type?.startsWith("image/"));
+  // Always start on the flat viewer; 360° is opt-in via the toolbar button.
+  const [viewMode, setViewMode] = useState<"flat" | "360">("flat");
+
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null); // natural-size hit area
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [resolvedImageUrl, setResolvedImageUrl] = useState(imageUrl);
+  const [imageNaturalSize, setImageNaturalSize] = useState<{ w: number; h: number } | null>(null);
+  // The full original can be tens of megapixels / 25MB+ (see the pan/zoom
+  // comment below), so show the asset's existing small thumbnail immediately
+  // and swap to the full-res original once it finishes loading, instead of
+  // leaving the stage blank while the original downloads.
+  const [fullImageReady, setFullImageReady] = useState(false);
 
   useEffect(() => {
-    setResolvedImageUrl(imageUrl);
+    const initialUrl = imageUrl && isRealImageAsset(asset)
+      ? withMediaTransform(imageUrl, REVIEW_PREVIEW_TRANSFORM, asset?.mime_type ?? null)
+      : imageUrl;
+    setResolvedImageUrl(initialUrl);
+    setImageNaturalSize(null);
+    setFullImageReady(false);
     if (!imageUrl) return;
 
     const mimeType = asset?.mime_type ?? null;
@@ -301,7 +377,7 @@ export default function ImageAnnotatorWithAnnotations({
 
     void (async () => {
       try {
-        const response = await fetch(imageUrl, {
+        const response = await fetch(withMediaCorsHint(imageUrl), {
           method: "GET",
           mode: "cors",
           credentials: "omit",
@@ -315,6 +391,7 @@ export default function ImageAnnotatorWithAnnotations({
         if (active) setResolvedImageUrl(objectUrl);
       } catch (error) {
         console.error("Failed to prepare SVG for image reviewer", error);
+        onMediaError?.();
         if (active) setResolvedImageUrl(imageUrl);
       }
     })();
@@ -323,7 +400,7 @@ export default function ImageAnnotatorWithAnnotations({
       active = false;
       if (objectUrl) window.URL.revokeObjectURL(objectUrl);
     };
-  }, [asset?.mime_type, imageUrl]);
+  }, [asset?.mime_type, imageUrl, onMediaError]);
 
   // Drawing
   const {
@@ -346,6 +423,9 @@ export default function ImageAnnotatorWithAnnotations({
 
   // Zoom / Pan / BG
   const [scale, setScale] = useState(1);
+  const scaleRef = useRef(scale);
+  const centerAtScaleRef = useRef<(nextScale: number) => void>(() => {});
+  const previousPanelOpenRef = useRef<boolean | null>(null);
   const [minScale, setMinScale] = useState(0.05);
   const [maxScale] = useState(16);
   const [tx, setTx] = useState(0);
@@ -353,6 +433,14 @@ export default function ImageAnnotatorWithAnnotations({
   const [previewBackground, setPreviewBackground] = useState<PreviewBackground>("dark");
   const [showAnnotations, setShowAnnotations] = useState(true);
   const zoomPct = Math.round(scale * 100);
+
+  const annotationCanvasOptions = useMemo(() => {
+    const inverseScale = 1 / Math.max(scale, MIN_ANNOTATION_VISUAL_SCALE);
+    return {
+      lineWidth: ANNOTATION_STROKE_WIDTH * inverseScale,
+      arrowHeadSize: ANNOTATION_ARROW_HEAD_SIZE * inverseScale,
+    };
+  }, [scale]);
 
   const [interactionMode, setInteractionMode] = useState<ReviewMode>("view");
   const isViewMode = interactionMode === "view";
@@ -364,12 +452,37 @@ export default function ImageAnnotatorWithAnnotations({
     setAnnotating(isDrawMode);
   }, [isDrawMode, setAnnotating]);
 
+  // Reset to flat when navigating to a different asset -- otherwise 360° mode
+  // on one asset would carry over onto the next one opened.
+  useEffect(() => {
+    setViewMode("flat");
+  }, [asset?.id]);
+
+  // 360° mode has no coordinate system for pins/drawing on a sphere (see
+  // ReviewModeBar's restrictToView), so force interactionMode back to "view"
+  // whenever the user switches into it -- covers the case where they were
+  // mid-comment/draw on the flat view and then flip to 360.
+  useEffect(() => {
+    if (viewMode === "360") setInteractionMode("view");
+  }, [viewMode]);
+
+  // Bonus quick-exit alongside the toolbar button, in case the panorama
+  // viewer is stuck loading/erroring and covering the toolbar's attention.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && viewMode === "360") setViewMode("flat");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [viewMode]);
+
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
 
   // Inline composer for comment mode
   const [inlineComposerOpen, setInlineComposerOpen] = useState(false);
   const [inlineComposerText, setInlineComposerText] = useState("");
+  const [dockComposerText, setDockComposerText] = useState("");
   const inlineComposerRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
@@ -382,18 +495,38 @@ export default function ImageAnnotatorWithAnnotations({
     if (clearDraft) clearStrokes();
   }, [clearStrokes]);
 
+  const handleShowAnnotationsChange = useCallback((next: boolean) => {
+    setShowAnnotations(next);
+    if (!next) {
+      setSelectedAnnotationId(null);
+      setHoveredAnnotationId(null);
+      closeInlineComposer(true);
+      setInteractionMode("view");
+    }
+  }, [closeInlineComposer]);
+
   // Annotations (committed)
-  const [annotations, setAnnotations] = useState<Annotation[]>(annotationsProp ?? []);
+  // Holds only the fields the user has locally changed (delete/complete/
+  // edit), keyed by annotation id, re-applied on every sync below -- see
+  // mergeAnnotationOverrides for why: without it, deleting a comment and
+  // then adding another one (or anything else that refreshes
+  // annotationsProp) before the delete's own server round-trip/realtime
+  // echo lands would silently resurrect it, since the next prop sync still
+  // carries the pre-delete shape.
+  const [annotationOverrides, setAnnotationOverrides] = useState<Record<string, Partial<Annotation>>>({});
+  const [annotations, setAnnotations] = useState<Annotation[]>((annotationsProp ?? []) as Annotation[]);
   useEffect(() => {
     if (!annotationsProp) return;
-    try {
-      const arr = Array.isArray(annotationsProp) ? annotationsProp : [annotationsProp];
-      const normalized = arr.map((a: any) => normalizeAnnotation(a));
-      setAnnotations(normalized);
-    } catch {
-      setAnnotations(annotationsProp as Annotation[]);
-    }
-  }, [annotationsProp]);
+    setAnnotations(mergeAnnotationOverrides(normalizeAnnotationList(annotationsProp), annotationOverrides) as Annotation[]);
+  }, [annotationsProp, annotationOverrides]);
+  const applyLocalAnnotationUpdate = useCallback((id: string, patch: Partial<Annotation>) => {
+    setAnnotationOverrides((current) => ({ ...current, [id]: { ...current[id], ...patch } }));
+    setAnnotations((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }, []);
+
+  const { resolveFocus, beginDrag, updateDrag, endDrag, draggingId } = useDraggablePin();
+  const [popoverMeasureRef, popoverMeasuredSize] = useMeasuredSize<HTMLDivElement>();
+  const [composerMeasureRef, composerMeasuredSize] = useMeasuredSize<HTMLDivElement>();
 
   const annotationTargets = useMemo(() => {
     return annotations
@@ -401,8 +534,8 @@ export default function ImageAnnotatorWithAnnotations({
       .map((annotation, index) => {
         const focus = getAnnotationFocusPoint(
           annotation,
-          imgRef.current?.naturalWidth || undefined,
-          imgRef.current?.naturalHeight || undefined
+          imageNaturalSize?.w,
+          imageNaturalSize?.h
         );
         return {
           annotation,
@@ -412,7 +545,7 @@ export default function ImageAnnotatorWithAnnotations({
         };
       })
       .filter((entry) => entry.focus);
-  }, [annotations]);
+  }, [annotations, imageNaturalSize]);
   const selectedAnnotationTarget = useMemo(
     () => annotationTargets.find((entry) => entry.annotation.id === selectedAnnotationId) ?? null,
     [annotationTargets, selectedAnnotationId]
@@ -435,22 +568,26 @@ export default function ImageAnnotatorWithAnnotations({
   const draftAnchorBounds = useMemo(
     () => getDrawingBounds(
       draftStrokes,
-      imgRef.current?.naturalWidth || undefined,
-      imgRef.current?.naturalHeight || undefined
+      imageNaturalSize?.w,
+      imageNaturalSize?.h
     ),
-    [draftStrokes]
+    [draftStrokes, imageNaturalSize]
   );
-  const draftAnchorFocus = draftAnchorBounds
-    ? {
-        x: (draftAnchorBounds.minX + draftAnchorBounds.maxX) / 2,
-        y: (draftAnchorBounds.minY + draftAnchorBounds.maxY) / 2,
-      }
-    : null;
+  const draftAnchorFocus = useMemo(
+    () => draftAnchorBounds
+      ? {
+          x: (draftAnchorBounds.minX + draftAnchorBounds.maxX) / 2,
+          y: (draftAnchorBounds.minY + draftAnchorBounds.maxY) / 2,
+        }
+      : null,
+    [draftAnchorBounds]
+  );
   const getStageOverlayPosition = useCallback((
     focus: { x: number; y: number } | null,
     xOffset: number,
     yOffset: number,
-    width: number
+    width: number,
+    height: number
   ) => {
     const stage = stageRef.current;
     const img = imgRef.current;
@@ -460,20 +597,54 @@ export default function ImageAnnotatorWithAnnotations({
     const ih = img.naturalHeight || img.height || 1;
     const anchorX = tx + focus.x * iw * scale;
     const anchorY = ty + focus.y * ih * scale;
-    const maxLeft = Math.max(12, stage.clientWidth - width - 12);
+
+    return clampOverlayPosition({
+      anchorLeft: anchorX,
+      anchorTop: anchorY,
+      xOffset,
+      yOffset,
+      width,
+      height,
+      stageWidth: stage.clientWidth,
+      stageHeight: stage.clientHeight,
+    });
+  }, [scale, tx, ty]);
+  const getStagePointPosition = useCallback((focus: { x: number; y: number } | null) => {
+    const stage = stageRef.current;
+    const img = imgRef.current;
+    if (!stage || !img || !focus) return null;
+
+    const iw = img.naturalWidth || img.width || 1;
+    const ih = img.naturalHeight || img.height || 1;
 
     return {
-      left: Math.max(12, Math.min(maxLeft, anchorX + xOffset)),
-      top: Math.max(16, anchorY + yOffset),
+      left: tx + focus.x * iw * scale,
+      top: ty + focus.y * ih * scale,
     };
   }, [scale, tx, ty]);
+  const selectedAnnotationFocus = useMemo(() => {
+    if (!selectedAnnotationTarget?.focus) return null;
+    return resolveFocus(selectedAnnotationTarget.annotation.id, selectedAnnotationTarget.focus);
+  }, [selectedAnnotationTarget, resolveFocus]);
+  const resolvedDraftAnchorFocus = useMemo(
+    () => (draftAnchorFocus ? resolveFocus(DRAFT_PIN_ID, draftAnchorFocus) : null),
+    [draftAnchorFocus, resolveFocus]
+  );
   const selectedPopoverPosition = useMemo(
-    () => getStageOverlayPosition(selectedAnnotationTarget?.focus ?? null, 24, -18, 280),
-    [getStageOverlayPosition, selectedAnnotationTarget]
+    // 220px default: a rough single-author, short-comment CommentPopover
+    // height, used only until popoverMeasureRef reports the real rendered
+    // height (see useMeasuredSize) -- comment text length varies a lot, so a
+    // fixed guess alone would clip long comments near the stage's bottom edge.
+    () => getStageOverlayPosition(selectedAnnotationFocus, 24, -18, 280, popoverMeasuredSize?.height ?? 220),
+    [getStageOverlayPosition, selectedAnnotationFocus, popoverMeasuredSize]
   );
   const inlineComposerPosition = useMemo(
-    () => getStageOverlayPosition(draftAnchorFocus, 18, -12, 280),
-    [draftAnchorFocus, getStageOverlayPosition]
+    () => getStageOverlayPosition(resolvedDraftAnchorFocus, 18, -12, 280, composerMeasuredSize?.height ?? 200),
+    [resolvedDraftAnchorFocus, getStageOverlayPosition, composerMeasuredSize]
+  );
+  const draftAnchorPosition = useMemo(
+    () => getStagePointPosition(resolvedDraftAnchorFocus),
+    [resolvedDraftAnchorFocus, getStagePointPosition]
   );
 
   const recomputeCanvas = useCallback(() => {
@@ -498,8 +669,7 @@ export default function ImageAnnotatorWithAnnotations({
 
       // Only draw strokes if annotations are visible
       if (showAnnotations) {
-        ctx.lineWidth = 6;
-        drawStrokes(ctx, committedStrokes, w, h, img?.naturalWidth || undefined, img?.naturalHeight || undefined);
+        drawStrokes(ctx, committedStrokes, w, h, img?.naturalWidth || undefined, img?.naturalHeight || undefined, annotationCanvasOptions);
       }
     }
 
@@ -514,17 +684,7 @@ export default function ImageAnnotatorWithAnnotations({
     //   canvasPixels: { w: canvas.width, h: canvas.height },
     //   dpr: window.devicePixelRatio
     // });
-  }, [committedStrokes, scale, tx, ty, showAnnotations]);
-
-  // rAF-throttled recompute
-  const rafRef = useRef<number | null>(null);
-  const recomputeOnNextFrame = useCallback(() => {
-    if (rafRef.current != null) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      recomputeCanvas();
-    });
-  }, [recomputeCanvas]);
+  }, [annotationCanvasOptions, committedStrokes, showAnnotations]);
 
   // Observe overlay intrinsic size
   useEffect(() => {
@@ -550,10 +710,9 @@ export default function ImageAnnotatorWithAnnotations({
     // Only draw strokes if annotations are visible
     if (showAnnotations) {
       const img = imgRef.current;
-      ctx.lineWidth = 6;
-      drawStrokes(ctx, committedStrokes, canvasSize.w, canvasSize.h, img?.naturalWidth || undefined, img?.naturalHeight || undefined);
+      drawStrokes(ctx, committedStrokes, canvasSize.w, canvasSize.h, img?.naturalWidth || undefined, img?.naturalHeight || undefined, annotationCanvasOptions);
     }
-  }, [committedStrokes, canvasSize, showAnnotations]);
+  }, [annotationCanvasOptions, committedStrokes, canvasSize, showAnnotations]);
 
   // fit helper
   const computeFit = useCallback(() => {
@@ -566,19 +725,83 @@ export default function ImageAnnotatorWithAnnotations({
     const ih = img.naturalHeight || img.height;
     if (!iw || !ih || !sw || !sh) return 1;
     
-    // Default fit: contain whole image
-    let s = Math.min(sw / iw, sh / ih);
-    
-    // If it's a very tall image (likely a web screenshot), fit to width instead
-    if (ih > iw * 1.5 && (sw / iw) > s) {
-      s = sw / iw;
-    }
-    
+    // Contain the whole image within the stage regardless of aspect ratio.
+    // A "fit to width" override for tall images used to live here on the
+    // assumption a tall image was "likely a web screenshot" -- but real
+    // website screenshots are routed to WebScreenshotReview upstream (see
+    // isLikelyWebsiteScreenshot in ReviewAsset.tsx), so this component only
+    // ever sees regular images now. For those, fitting to width instead of
+    // containing meant any tall/portrait image (photos, posters, phone
+    // screenshots, etc.) overflowed the stage vertically on load, forcing
+    // the user to manually zoom out to see the whole thing.
+    const s = Math.min(sw / iw, sh / ih);
+
     return Math.max(0.05, Math.min(s, 32));
   }, []);
 
+  // Progressive resolution upgrade — lazy, not automatic. The fast preview
+  // is capped at REVIEW_PREVIEW_TRANSFORM's width, which is already the same
+  // "one well-sized review proxy" approach other review tools use — they
+  // don't eagerly re-fetch a heavier file in the background for every asset
+  // someone glances at, and neither should we. Fetching the untransformed
+  // original automatically on every view was adding an extra multi-MB
+  // request nobody asked for. Instead, only start that fetch once the viewer
+  // actually zooms in past the fit-to-view level — a clear signal they want
+  // more detail than the preview can give — so it's warming by the time
+  // they'd notice the preview looking soft, without paying the bandwidth
+  // cost on assets nobody looks at that closely.
+  const upgradeStateRef = useRef<{ triggered: boolean; cancelled: boolean }>({ triggered: false, cancelled: false });
+
+  useEffect(() => {
+    upgradeStateRef.current = { triggered: false, cancelled: false };
+    return () => {
+      upgradeStateRef.current.cancelled = true;
+    };
+  }, [imageUrl]);
+
+  useEffect(() => {
+    if (!fullImageReady) return;
+    // Compare against the actual fit-to-view scale, not a hardcoded 1 — for
+    // any image smaller than the viewing area, computeFit() itself legitimately
+    // returns a scale ABOVE 1 (stretching a small image to fill the viewport)
+    // with zero user zoom involved. Comparing against a flat "scale >= 1"
+    // meant this fired immediately on load for every such image (not just on
+    // deliberate zoom-in), which is exactly what looked like an automatic,
+    // uncommanded zoom-in/zoom-out: the swap to the full original changes its
+    // natural dimensions, retriggering the fit calculation and visibly
+    // reflowing the view. A small epsilon avoids float-noise false triggers
+    // right at the fit boundary.
+    const fitScale = computeFit();
+    if (scale <= fitScale * 1.05) return;
+    const state = upgradeStateRef.current;
+    if (state.triggered) return;
+    if (!imageUrl || !isRealImageAsset(asset)) return;
+
+    const knownWidth = asset?.width ?? null;
+    const previewCapWidth = REVIEW_PREVIEW_TRANSFORM.width ?? null;
+    if (knownWidth != null && previewCapWidth != null && knownWidth <= previewCapWidth) return;
+
+    state.triggered = true;
+    const upgrade = new window.Image();
+    if ("fetchPriority" in upgrade) (upgrade as unknown as { fetchPriority: string }).fetchPriority = "low";
+    upgrade.src = imageUrl;
+
+    const swapIn = () => {
+      if (!state.cancelled) setResolvedImageUrl(imageUrl);
+    };
+    if (typeof upgrade.decode === "function") {
+      // On failure, just stay on the (already working) preview — swapping
+      // in a URL that just failed to load/decode would only hand the same
+      // failure to the visible <img>, trading a working preview for a
+      // broken one instead of leaving well enough alone.
+      upgrade.decode().then(swapIn).catch(() => {});
+    } else {
+      upgrade.onload = swapIn;
+    }
+  }, [fullImageReady, scale, imageUrl, asset?.mime_type, asset?.width, computeFit]);
+
   // Zoom helpers
-  const clampScale = (s: number) => Math.max(minScale, Math.min(maxScale, s));
+  const clampScale = useCallback((s: number) => Math.max(minScale, Math.min(maxScale, s)), [maxScale, minScale]);
 
   const centerAtScale = useCallback(
     (nextScale: number) => {
@@ -638,6 +861,28 @@ export default function ImageAnnotatorWithAnnotations({
     [scale, tx, ty, clampScale, recomputeCanvas]
   );
 
+  // Pans (without changing scale) to bring a normalized (0..1) image-space
+  // point to the center of the stage -- used to reveal a comment's pin when
+  // it's selected from the sidebar list.
+  const panToNormalizedPoint = useCallback(
+    (point: { x: number; y: number }) => {
+      const stage = stageRef.current;
+      const img = imgRef.current;
+      if (!stage || !img) return;
+
+      const iw = img.naturalWidth || img.width;
+      const ih = img.naturalHeight || img.height;
+      const sw = stage.clientWidth;
+      const sh = stage.clientHeight;
+
+      setTx(sw / 2 - point.x * iw * scale);
+      setTy(sh / 2 - point.y * ih * scale);
+
+      requestAnimationFrame(recomputeCanvas);
+    },
+    [scale, recomputeCanvas]
+  );
+
   const zoomAroundCenter = useCallback(
     (nextScale: number) => {
       const stage = stageRef.current;
@@ -649,10 +894,19 @@ export default function ImageAnnotatorWithAnnotations({
     [zoomAroundPoint]
   );
 
-  // Recompute on transform changes
-  useEffect(() => {
-    recomputeOnNextFrame();
-  }, [scale, tx, ty, recomputeOnNextFrame]);
+  // Pan/zoom is a pure CSS transform (translate/scale) on the wrapper — it
+  // never changes the image's natural size or devicePixelRatio, so the
+  // annotation canvas's backing store never needs to be reallocated for it.
+  // A prior effect re-triggered a full canvas resize + stroke redraw on
+  // every scale/tx/ty change (i.e. on every pointermove while panning, and
+  // every wheel tick while zooming) — for a large image (tens of megapixels,
+  // as with a 25MB+ 360 panorama) at 2x/3x DPR that reallocation is a
+  // multi-hundred-megapixel operation repeated every animation frame during
+  // interaction, blocking the main thread and freezing the whole page's
+  // paint (sidebar, comments panel, toolbar included), not just the image.
+  // Deliberate zoom/fit actions (centerAtScale, zoomAroundPoint) already
+  // request a one-shot recompute themselves; ResizeObserver above covers
+  // actual overlay/image size changes.
 
   // Initial fit & center
   const fitOnLoad = useCallback(() => {
@@ -686,6 +940,12 @@ export default function ImageAnnotatorWithAnnotations({
   const [panning, setPanning] = useState(false);
   const panStart = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   const onPointerDownStage = (e: React.PointerEvent) => {
+    if (isReviewUiTarget(e.target)) {
+      setPanning(false);
+      panStart.current = null;
+      return;
+    }
+
     if (isViewMode && e.buttons === 1) {
       setPanning(true);
       panStart.current = { x: e.clientX, y: e.clientY, tx, ty };
@@ -704,12 +964,22 @@ export default function ImageAnnotatorWithAnnotations({
       const nx = Math.max(0, Math.min(1, (sx - tx) / (iw * scale)));
       const ny = Math.max(0, Math.min(1, (sy - ty) / (ih * scale)));
       addStroke(createAnchorStroke({ x: nx, y: ny }, color), true);
-      setInlineComposerText("");
+      setInlineComposerText(dockComposerText);
       setInlineComposerOpen(true);
     }
   };
   const onPointerMoveStage = (e: React.PointerEvent) => {
     if (!panning || !panStart.current) return;
+    if (e.buttons !== 1) {
+      setPanning(false);
+      panStart.current = null;
+      return;
+    }
+    if (isReviewUiTarget(e.target)) {
+      setPanning(false);
+      panStart.current = null;
+      return;
+    }
     const dx = e.clientX - panStart.current.x;
     const dy = e.clientY - panStart.current.y;
     setTx(panStart.current.tx + dx);
@@ -723,9 +993,9 @@ export default function ImageAnnotatorWithAnnotations({
     const hadActiveStroke = !!activeStroke;
     pointerUp();
     if (!hadActiveStroke) return;
-    setInlineComposerText("");
+    setInlineComposerText(dockComposerText);
     setInlineComposerOpen(true);
-  }, [activeStroke, pointerUp]);
+  }, [activeStroke, dockComposerText, pointerUp]);
 
   // Keyboard
   useEffect(() => {
@@ -778,24 +1048,93 @@ export default function ImageAnnotatorWithAnnotations({
         : "dark";
       setPreviewBackground(fallback);
     }
-  }, [imageUrl, resolvedImageUrl]);
+  }, [asset?.mime_type, imageUrl, resolvedImageUrl]);
 
   const onImgLoad = useCallback(() => {
+    const img = imgRef.current;
+    if (img?.naturalWidth && img.naturalHeight) {
+      setImageNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+    }
     fitOnLoad();
     detectAlpha();
+    setFullImageReady(true);
     requestAnimationFrame(recomputeCanvas);
   }, [fitOnLoad, detectAlpha, recomputeCanvas]);
 
-  useEffect(() => {
-    return () => { if (rafRef.current != null) cancelAnimationFrame(rafRef.current); };
-  }, []);
+  const onImgError = useCallback(() => {
+    // Cloudflare-resized proxy failed to load: fall back to the small
+    // pre-generated cover thumbnail first (fast), and only if that also
+    // fails, to the untransformed original — staying fast in the failure
+    // case instead of immediately reintroducing the full-original download
+    // this transform exists to avoid.
+    const transformedUrl = imageUrl && isRealImageAsset(asset)
+      ? withMediaTransform(imageUrl, REVIEW_PREVIEW_TRANSFORM, asset?.mime_type ?? null)
+      : null;
+    const coverUrl = asset?.cover_image_url ?? null;
+
+    if (transformedUrl && transformedUrl !== imageUrl && resolvedImageUrl === transformedUrl) {
+      if (coverUrl && coverUrl !== resolvedImageUrl) {
+        setResolvedImageUrl(coverUrl);
+        return;
+      }
+      setResolvedImageUrl(imageUrl);
+      return;
+    }
+
+    if (coverUrl && coverUrl !== imageUrl && resolvedImageUrl === coverUrl) {
+      setResolvedImageUrl(imageUrl);
+      return;
+    }
+
+    // Stop showing the blurred thumbnail placeholder so the error state
+    // underneath (handled by the parent via onMediaError) isn't obscured.
+    setFullImageReady(true);
+    onMediaError?.();
+  }, [asset, imageUrl, resolvedImageUrl, onMediaError]);
 
   // Background
-  const stageBg = previewBackgroundClass(previewBackground);
+  const stageBg = previewBackgroundClassAlwaysDark(previewBackground);
 
   // Layout
-  const panelOpen = true;
+  const panelOpen = commentsPanelOpen ?? true;
+  const canCompleteComments = !commentMutationContext?.share_token;
+
+  // Edit/delete target the "comment" function by default (unchanged for
+  // every existing caller). A share flow with its own isolated comment
+  // function passes commentEndpoint to route here instead — that function
+  // takes an action-based POST body rather than comment's PATCH-with-status.
+  const editOrDeleteComment = useCallback(async (action: "edit" | "delete", fields: { id: string; body?: string }) => {
+    if (commentEndpoint === "comment") {
+      const body: Record<string, unknown> = { id: fields.id, ...(commentMutationContext ?? {}) };
+      if (action === "edit") body.body = fields.body;
+      else body.status = "deleted";
+      return invokeEdgeFunction("comment", { method: "PATCH", body });
+    }
+    return invokeEdgeFunction(commentEndpoint, {
+      method: "POST",
+      body: { action, id: fields.id, body: fields.body, ...(commentMutationContext ?? {}) },
+    });
+  }, [commentEndpoint, commentMutationContext]);
+
   const filteredAnnotations = useMemo(() => annotations, [annotations]);
+
+  useEffect(() => {
+    scaleRef.current = scale;
+  }, [scale]);
+
+  useLayoutEffect(() => {
+    centerAtScaleRef.current = centerAtScale;
+  }, [centerAtScale]);
+
+  useLayoutEffect(() => {
+    if (previousPanelOpenRef.current === null) {
+      previousPanelOpenRef.current = panelOpen;
+      return;
+    }
+    if (previousPanelOpenRef.current === panelOpen) return;
+    previousPanelOpenRef.current = panelOpen;
+    centerAtScaleRef.current(scaleRef.current);
+  }, [panelOpen]);
 
   return (
     <div className={cn("w-full h-full", className)}>
@@ -804,7 +1143,7 @@ export default function ImageAnnotatorWithAnnotations({
           <div className="flex h-full min-h-0 w-full flex-col lg:flex-row">
             <div
               className={cn(
-                "flex min-h-0 min-w-0 basis-[48%] flex-col lg:basis-auto lg:flex-1 lg:min-h-0 lg:h-full",
+                "relative flex min-h-0 min-w-0 basis-[48%] flex-col lg:basis-auto lg:flex-1 lg:min-h-0 lg:h-full",
                 panelOpen ? "lg:w-[calc(100%-360px)]" : "w-full"
               )}
             >
@@ -813,6 +1152,7 @@ export default function ImageAnnotatorWithAnnotations({
                 mode={interactionMode}
                 onModeChange={(m) => {
                   closeInlineComposer(true);
+                  if (m !== "view") setShowAnnotations(true);
                   setInteractionMode(m);
                 }}
                 tool={tool}
@@ -820,6 +1160,7 @@ export default function ImageAnnotatorWithAnnotations({
                 color={color}
                 onColorChange={setColor}
                 hidePreview={true}
+                restrictToView={viewMode === "360"}
               />
 
               {/* Stage: full-height viewport; layer is transformed together */}
@@ -835,12 +1176,43 @@ export default function ImageAnnotatorWithAnnotations({
                 onPointerDown={onPointerDownStage}
                 onPointerMove={onPointerMoveStage}
                 onPointerUp={onPointerUpStage}
-                style={{ touchAction: "none" }}
+                // Comment mode only needs a plain tap (dropped on
+                // pointerdown, no drag involved), unlike view-mode panning
+                // or draw-mode stroking -- so it doesn't need to suppress
+                // native touch-scroll the way those two drag gestures do.
+                style={{ touchAction: isCommentMode ? "auto" : "none" }}
               >
-                {/* Layer: natural-size image + overlay + canvases — transformed together */}
+                {viewMode === "flat" && (
+                <>
+                {asset?.cover_image_url && !fullImageReady ? (
+                  <img
+                    src={asset.cover_image_url}
+                    alt=""
+                    aria-hidden="true"
+                    draggable={false}
+                    fetchPriority="high"
+                    decoding="async"
+                    className="pointer-events-none absolute inset-0 h-full w-full scale-105 object-contain p-6 opacity-70 blur-xl"
+                  />
+                ) : null}
+
+                {/* Layer: natural-size image + overlay + canvases — transformed together.
+                    Stays hidden until fitOnLoad has computed the real fit
+                    scale/position — scale starts at its default (1, i.e.
+                    natural pixel size) and only snaps to the fit value once
+                    the image finishes loading, so painting this layer before
+                    then flashes the image at full natural size for a frame
+                    (visible as a "zoom out" pop right after load). Both the
+                    corrected transform and this reveal land in the same
+                    batched state update, so there's nothing to see until
+                    it's already correctly sized. */}
                 <div
-                  className="absolute top-0 left-0 will-change-transform"
-                  style={{ transform: `translate(${tx}px, ${ty}px) scale(${scale})`, transformOrigin: "0 0" }}
+                  className="absolute top-0 left-0 will-change-transform transition-opacity duration-150 ease-out"
+                  style={{
+                    transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
+                    transformOrigin: "0 0",
+                    opacity: fullImageReady ? 1 : 0,
+                  }}
                 >
                   <img
                     ref={imgRef}
@@ -848,7 +1220,10 @@ export default function ImageAnnotatorWithAnnotations({
                     alt={title ?? "Image"}
                     className="block select-none"
                     draggable={false}
+                    fetchPriority="high"
+                    decoding="async"
                     onLoad={onImgLoad}
+                    onError={onImgError}
                     style={{ width: "auto", height: "auto", maxWidth: "none", maxHeight: "none" }}
                   />
 
@@ -870,63 +1245,103 @@ export default function ImageAnnotatorWithAnnotations({
                     targetRef={overlayRef as unknown as React.RefObject<HTMLElement>}
                     annotating={annotating}
                     strokes={showAnnotations ? liveStrokes : []}
+                    visualScale={scale}
                     naturalWidth={imgRef.current?.naturalWidth}
                     naturalHeight={imgRef.current?.naturalHeight}
-                    onPointerDown={(p) => pointerDown(p as any)}
-                    onPointerMove={(p) => pointerMove(p as any)}
+                    onPointerDown={(p) => pointerDown(p)}
+                    onPointerMove={(p) => pointerMove(p)}
                     onPointerUp={handleOverlayPointerUp}
                     onPointerCancel={() => pointerCancel()}
 
                   />
-
-                  {/* Render Pins & Popovers */}
-                  {showAnnotations && annotationTargets.map((entry) => {
-                    const isSelected = entry.annotation.id === selectedAnnotationId;
-                    const isHovered = entry.annotation.id === hoveredAnnotationId;
-                    if (!entry.focus) return null;
-                    return (
-                      <button
-                        key={entry.annotation.id}
-                        type="button"
-                        className={cn(
-                          "absolute z-20 -translate-x-1/2 -translate-y-1/2 transition hover:-translate-y-[55%]",
-                          (isSelected || isHovered) ? "z-30" : ""
-                        )}
-                        style={{
-                          left: `${entry.focus.x * 100}%`,
-                          top: `${entry.focus.y * 100}%`,
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedAnnotationId(entry.annotation.id);
-                        }}
-                        onMouseEnter={() => setHoveredAnnotationId(entry.annotation.id)}
-                        onMouseLeave={() => setHoveredAnnotationId((current) => current === entry.annotation.id ? null : current)}
-                      >
-                        <BubblePin 
-                          initials={getAvatarInitials(entry.annotation.author || "?")}
-                          color={entry.accentColor}
-                          userId={entry.annotation.authorId}
-                          userName={entry.annotation.author}
-                        />
-                      </button>
-                    );
-                  })}
-
-                  {/* Draft anchor pin (Comment mode) */}
-                  {isCommentMode && draftAnchorFocus ? (
-                    <div
-                      className="pointer-events-none absolute z-20 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[#35c8d6]/70 bg-[#35c8d6] text-[11px] font-semibold text-slate-950 shadow-[0_12px_30px_rgba(53,200,214,0.28)] ring-4 ring-[#35c8d6]/20"
-                      style={{ left: `${draftAnchorFocus.x * 100}%`, top: `${draftAnchorFocus.y * 100}%` }}
-                    >
-                      +
-                    </div>
-                  ) : null}
                 </div>
+
+                {/* Render annotation pins in stage space so they stay usable at any image zoom. */}
+                {showAnnotations && annotationTargets.map((entry) => {
+                  if (!entry.focus) return null;
+                  const focus = entry.focus;
+                  const isSelected = entry.annotation.id === selectedAnnotationId;
+                  const isHovered = entry.annotation.id === hoveredAnnotationId;
+                  const isDragging = draggingId === entry.annotation.id;
+                  const position = getStagePointPosition(resolveFocus(entry.annotation.id, focus));
+                  if (!position) return null;
+                  const imgWidthPx = (imgRef.current?.naturalWidth || 0) * scale;
+                  const imgHeightPx = (imgRef.current?.naturalHeight || 0) * scale;
+                  return (
+                    <button
+                      key={entry.annotation.id}
+                      type="button"
+                      data-review-ui="true"
+                      title="Drag to move this pin"
+                      className={cn(
+                        "group absolute z-20 -translate-x-1/2 -translate-y-1/2 touch-none transition-transform",
+                        isDragging ? "cursor-grabbing" : "cursor-grab hover:-translate-y-[55%]",
+                        (isSelected || isHovered) ? "z-30" : ""
+                      )}
+                      style={{
+                        left: `${position.left}px`,
+                        top: `${position.top}px`,
+                      }}
+                      onPointerDown={(e) => beginDrag(entry.annotation.id, focus, e)}
+                      onPointerMove={(e) => updateDrag(e, imgWidthPx, imgHeightPx)}
+                      onPointerUp={(e) => {
+                        e.stopPropagation();
+                        const wasDrag = endDrag(e);
+                        if (!wasDrag) setSelectedAnnotationId(entry.annotation.id);
+                      }}
+                      onMouseEnter={() => setHoveredAnnotationId(entry.annotation.id)}
+                      onMouseLeave={() => setHoveredAnnotationId((current) => current === entry.annotation.id ? null : current)}
+                    >
+                      <BubblePin
+                        initials={getAvatarInitials(entry.annotation.author || "?")}
+                        userId={entry.annotation.authorId}
+                        userName={entry.annotation.author}
+                      />
+                      {/* Move-affordance badge: only appears on hover, so it signifies
+                          draggability without cluttering pins at rest. */}
+                      <span className="pointer-events-none absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-white/40 bg-slate-900/90 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                        <Move className="h-2.5 w-2.5" />
+                      </span>
+                    </button>
+                  );
+                })}
+
+                {/* Draft anchor pin (Comment mode) -- draggable like a placed pin so
+                    the user can reposition it before submitting, e.g. to pull it away
+                    from other nearby pins. */}
+                {showAnnotations && isCommentMode && draftAnchorPosition && resolvedDraftAnchorFocus ? (
+                  <button
+                    type="button"
+                    data-review-ui="true"
+                    title="Drag to move this pin"
+                    className={cn(
+                      "group absolute z-20 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 touch-none items-center justify-center rounded-full border border-[#35c8d6]/70 bg-[#35c8d6] text-[11px] font-semibold text-slate-950 shadow-[0_12px_30px_rgba(53,200,214,0.28)] ring-4 ring-[#35c8d6]/20 transition-transform",
+                      draggingId === DRAFT_PIN_ID ? "cursor-grabbing" : "cursor-grab"
+                    )}
+                    style={{ left: `${draftAnchorPosition.left}px`, top: `${draftAnchorPosition.top}px` }}
+                    onPointerDown={(e) => beginDrag(DRAFT_PIN_ID, resolvedDraftAnchorFocus, e)}
+                    onPointerMove={(e) => updateDrag(
+                      e,
+                      (imgRef.current?.naturalWidth || 0) * scale,
+                      (imgRef.current?.naturalHeight || 0) * scale
+                    )}
+                    onPointerUp={(e) => {
+                      e.stopPropagation();
+                      endDrag(e);
+                    }}
+                  >
+                    +
+                    <span className="pointer-events-none absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full border border-white/40 bg-slate-900/90 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                      <Move className="h-2.5 w-2.5" />
+                    </span>
+                  </button>
+                ) : null}
 
                 {showAnnotations && selectedAnnotationTarget && selectedPopoverPosition ? (
                   <div
+                    ref={popoverMeasureRef}
                     className="absolute z-40"
+                    data-review-ui="true"
                     style={{
                       left: `${selectedPopoverPosition.left}px`,
                       top: `${selectedPopoverPosition.top}px`,
@@ -939,24 +1354,34 @@ export default function ImageAnnotatorWithAnnotations({
                       createdAt={selectedAnnotationTarget.annotation.createdAt}
                       isCompleted={selectedAnnotationTarget.annotation.isCompleted}
                       onClose={() => setSelectedAnnotationId(null)}
-                      onDelete={async () => {
-                        setAnnotations((prev) => prev.map((a) => a.id === selectedAnnotationTarget.annotation.id ? { ...a, isDeleted: true } : a));
-                        await invokeEdgeFunction("comment", { method: "PATCH", body: { id: selectedAnnotationTarget.annotation.id, status: "deleted" } });
+                      onDelete={!commentMutationContext?.share_token || selectedAnnotationTarget.annotation.canManageComment ? async () => {
+                        applyLocalAnnotationUpdate(selectedAnnotationTarget.annotation.id, { isDeleted: true });
+                        await editOrDeleteComment("delete", { id: selectedAnnotationTarget.annotation.id });
                         setSelectedAnnotationId(null);
-                      }}
-                      onComplete={async () => {
+                      } : undefined}
+                      onComplete={canCompleteComments ? async () => {
                         const newCompleted = !selectedAnnotationTarget.annotation.isCompleted;
-                        setAnnotations((prev) => prev.map((a) => a.id === selectedAnnotationTarget.annotation.id ? { ...a, isCompleted: newCompleted } : a));
-                        await invokeEdgeFunction("comment", { method: "PATCH", body: { id: selectedAnnotationTarget.annotation.id, status: newCompleted ? "completed" : "active" } });
-                      }}
+                        applyLocalAnnotationUpdate(selectedAnnotationTarget.annotation.id, { isCompleted: newCompleted });
+                        await invokeEdgeFunction("comment", { method: "PATCH", body: { id: selectedAnnotationTarget.annotation.id, status: newCompleted ? "completed" : "active", ...(commentMutationContext ?? {}) } });
+                      } : undefined}
+                      isDragging={draggingId === selectedAnnotationTarget.annotation.id}
+                      onDragHandlePointerDown={(e) => selectedAnnotationTarget.focus && beginDrag(selectedAnnotationTarget.annotation.id, selectedAnnotationTarget.focus, e)}
+                      onDragHandlePointerMove={(e) => updateDrag(
+                        e,
+                        (imgRef.current?.naturalWidth || 0) * scale,
+                        (imgRef.current?.naturalHeight || 0) * scale
+                      )}
+                      onDragHandlePointerUp={(e) => endDrag(e)}
                     />
                   </div>
                 ) : null}
 
                 {/* Inline composer (Comment + Draw modes) */}
-                {inlineComposerOpen && inlineComposerPosition ? (
+                {showAnnotations && inlineComposerOpen && inlineComposerPosition ? (
                   <div
+                    ref={composerMeasureRef}
                     className="absolute z-30 w-[280px] max-w-[calc(100%-24px)]"
+                    data-review-ui="true"
                     style={{
                       left: `${inlineComposerPosition.left}px`,
                       top: `${inlineComposerPosition.top}px`,
@@ -964,10 +1389,25 @@ export default function ImageAnnotatorWithAnnotations({
                   >
                     <InlineNoteComposer
                       value={inlineComposerText}
-                      onChange={setInlineComposerText}
+                      onChange={(value) => {
+                        setInlineComposerText(value);
+                        setDockComposerText(value);
+                      }}
+                      isDragging={draggingId === DRAFT_PIN_ID}
+                      onDragHandlePointerDown={(e) => resolvedDraftAnchorFocus && beginDrag(DRAFT_PIN_ID, resolvedDraftAnchorFocus, e)}
+                      onDragHandlePointerMove={(e) => updateDrag(
+                        e,
+                        (imgRef.current?.naturalWidth || 0) * scale,
+                        (imgRef.current?.naturalHeight || 0) * scale
+                      )}
+                      onDragHandlePointerUp={(e) => endDrag(e)}
                       color={color}
                       label={isCommentMode ? "Add note here" : "Describe your annotation"}
                       hint={isCommentMode ? "Pin stays attached" : "Ctrl+Enter to submit"}
+                      projectId={projectId}
+                      organizationId={organizationId}
+                      workspaceId={workspaceId}
+                      assetId={assetId}
                       onCancel={() => closeInlineComposer(true)}
                       onSubmit={async () => {
                         const text = inlineComposerText.trim();
@@ -985,8 +1425,11 @@ export default function ImageAnnotatorWithAnnotations({
                             emoji: {},
                             drawing: [...liveStrokes],
                           };
-                          setAnnotations((prev) => { if (prev.some(a => a.id === payload.id)) return prev; return [...prev, payload]; });
+                          if (!onAddAnnotation) {
+                            setAnnotations((prev) => { if (prev.some(a => a.id === payload.id)) return prev; return [...prev, payload]; });
+                          }
                           closeInlineComposer(true);
+                          setDockComposerText("");
                           setInteractionMode("view");
                           if (onAddAnnotation) await onAddAnnotation(payload);
                         } catch (err) { console.error("Failed to submit comment:", err); }
@@ -994,8 +1437,22 @@ export default function ImageAnnotatorWithAnnotations({
                     />
                   </div>
                 ) : null}
+                </>
+                )}
 
-                <div className="absolute bottom-3 left-3 flex max-w-[calc(100%-5.5rem)] flex-wrap items-center gap-2 rounded-lg bg-black/60 px-3 backdrop-blur-sm opacity-90 transition-opacity hover:opacity-100 sm:bottom-4 sm:left-4 sm:max-w-none">
+                {viewMode === "360" && (
+                  <Suspense fallback={null}>
+                    <Panorama360Viewer
+                      imageUrl={imageUrl}
+                      className="absolute inset-0"
+                      onExit={() => setViewMode("flat")}
+                    />
+                  </Suspense>
+                )}
+
+                <div data-review-ui="true" className="absolute bottom-3 left-3 z-20 flex max-w-[calc(100%-5.5rem)] flex-wrap items-center gap-2 rounded-lg bg-black/60 px-3 backdrop-blur-sm opacity-90 transition-opacity hover:opacity-100 sm:bottom-4 sm:left-4 sm:max-w-none">
+                  {viewMode === "flat" && (
+                  <>
                   {/* Zoom controls */}
                   <div className="flex items-center gap-1">
                     <Button variant="ghost" size="sm" onClick={() => zoomAroundCenter(scale / 1.1)} title="Zoom out (Ctrl/⌘-)" aria-label="Zoom out" className="text-white hover:bg-white/10 h-8 w-8 p-0">
@@ -1018,6 +1475,8 @@ export default function ImageAnnotatorWithAnnotations({
                   </Button>
 
                   <div className="h-4 w-px bg-white/20" />
+                  </>
+                  )}
 
                   <Button
                     variant="ghost"
@@ -1028,28 +1487,44 @@ export default function ImageAnnotatorWithAnnotations({
                       e.preventDefault();
                       const storagePath = asset?.storage_path;
                       if (storagePath) {
-                        const proxy = import.meta.env.VITE_ASSET_PUBLIC_BASE_URL || "";
-                        const base = proxy.endsWith("/") ? proxy.slice(0, -1) : proxy;
-                        const path = storagePath.startsWith("/") ? storagePath : `/${storagePath}`;
-                        const url = `${base}${path}`;
-                        void downloadFile(url, asset?.title || "image");
+                        // For camera RAW, imageUrl is the preview JPEG; Download must return the original file.
+                        const isRawPreview = getRawPreviewInfo(asset) !== null;
+                        const url = isRawPreview ? resolveAssetDownloadUrl(asset) : (imageUrl || resolveAssetDownloadUrl(asset));
+                        void downloadFile(url, asset?.title || "image", { fallbackUrl: fallbackDownloadUrl });
                       }
                     }}
                     title="Download"
                   >
                     <Download className="h-4 w-4" />
                   </Button>
+
+                  {canShow360 && (
+                    <>
+                      <div className="h-4 w-px bg-white/20" />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setViewMode(viewMode === "flat" ? "360" : "flat")}
+                        title={viewMode === "flat" ? "View in 360°" : "Exit 360° view"}
+                        className="text-white hover:bg-white/10 text-xs px-2 h-8 gap-1.5"
+                      >
+                        <Orbit className="h-4 w-4" />
+                        {viewMode === "flat" ? "360° View" : "Exit 360°"}
+                      </Button>
+                    </>
+                  )}
                 </div>
 
                 {/* Floating background toggle - top right corner */}
-                <div className="absolute bottom-3 right-3 flex items-center gap-2 rounded-lg bg-black/60 px-3 py-2 backdrop-blur-sm opacity-90 transition-opacity hover:opacity-100 sm:bottom-4 sm:right-4">
+                {viewMode === "flat" && (
+                <div data-review-ui="true" className="absolute bottom-3 right-3 z-20 flex items-center gap-2 rounded-lg bg-black/60 px-3 py-2 backdrop-blur-sm opacity-90 transition-opacity hover:opacity-100 sm:bottom-4 sm:right-4">
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <div className="flex items-center">
                           <Switch
                             checked={showAnnotations}
-                            onCheckedChange={setShowAnnotations}
+                            onCheckedChange={handleShowAnnotationsChange}
                           />
                           <label className="text-xs text-white select-none ml-2 cursor-pointer">
                             {showAnnotations ? "Hide annotations" : "Show annotations"}
@@ -1062,21 +1537,15 @@ export default function ImageAnnotatorWithAnnotations({
                     </Tooltip>
                   </TooltipProvider>
                 </div>
+                )}
               </div>
 
 
             </div>
 
             {/* Right panel */}
-            <AnimatePresence>
-              {true && (
-                <motion.div
-                  initial={{ x: 40, opacity: 0 }}
-                  animate={{ x: 0, opacity: 1 }}
-                  exit={{ x: 40, opacity: 0 }}
-                  transition={{ duration: 0.18 }}
-                  className="flex min-h-0 flex-1 w-full flex-col lg:h-full lg:w-auto lg:flex-none"
-                >
+            {panelOpen ? (
+              <div className="flex min-h-0 flex-1 w-full flex-col lg:h-full lg:w-auto lg:flex-none">
                   <div className="h-full min-h-0">
                     <CommentsPanel
                       items={filteredAnnotations.map((a: Annotation) => ({
@@ -1088,15 +1557,31 @@ export default function ImageAnnotatorWithAnnotations({
                         hasDrawing: !!(a.drawing && a.drawing.length > 0),
                         isCompleted: a.isCompleted,
                         isDeleted: a.isDeleted,
+                        canManageComment: a.canManageComment,
+                        canDeleteComment: a.canDeleteComment,
                         createdAt: a.createdAt,
                       }))}
-                      onItemClick={(id) => setSelectedAnnotationId(id)}
+                      onItemClick={(id) => {
+                        setSelectedAnnotationId(id);
+                        const target = annotationTargets.find((entry) => entry.annotation.id === id);
+                        if (target?.focus) panToNormalizedPoint(target.focus);
+                      }}
 
                       // Bottom dock props (no timestamp for images)
                       showCommentDock={true}
                       includeTimestamp={false}
+                      // 360° mode has no coordinate system for pins/drawing
+                      // on a sphere (see ReviewModeBar's restrictToView) --
+                      // hide the Comment/Draw controls here too.
+                      showAnnotationControls={viewMode === "flat"}
                       annotating={isDrawMode}
                       onToggleAnnotating={() => setInteractionMode(isDrawMode ? "view" : "draw")}
+                      reviewMode={isCommentMode ? "comment" : isDrawMode ? "draw" : "view"}
+                      onReviewModeChange={(mode) => {
+                        closeInlineComposer(true);
+                        if (mode !== "view") setShowAnnotations(true);
+                        setInteractionMode(mode);
+                      }}
                       tool={tool}
                       onToolChange={setTool}
                       color={color}
@@ -1126,16 +1611,19 @@ export default function ImageAnnotatorWithAnnotations({
 
                           // console.log("📝 Step 2: Adding to local state...");
                           // Add to local state immediately for optimistic updates
-                          setAnnotations((prev: Annotation[]) => {
-                            const exists = prev.some(a => a.id === payload.id);
-                            if (exists) return prev;
-                            return [...prev, payload];
-                          });
+                          if (!onAddAnnotation) {
+                            setAnnotations((prev: Annotation[]) => {
+                              const exists = prev.some(a => a.id === payload.id);
+                              if (exists) return prev;
+                              return [...prev, payload];
+                            });
+                          }
                           // console.log("✅ Step 2 complete: Added to local state");
 
                           // console.log("📝 Step 3: Clearing UI state...");
                           // Clear UI state immediately
                           setInteractionMode("view");
+                          setDockComposerText("");
                           clearStrokes();
                           // console.log("✅ Step 3 complete: UI state cleared");
 
@@ -1152,38 +1640,27 @@ export default function ImageAnnotatorWithAnnotations({
                           console.error('❌ Failed to submit comment:', error);
                         }
                       }}
+                      commentValue={dockComposerText}
+                      onCommentChange={setDockComposerText}
 
                       // Comment actions
                       onEditComment={async (id: string, newText: string) => {
-                        setAnnotations((prev: Annotation[]) =>
-                          prev.map(a => a.id === id ? { ...a, text: newText } : a)
-                        );
-                        // TODO: Call API to update comment in database
-                        await invokeEdgeFunction("comment", {
-                          method: "PATCH",
-                          body: { id, body: newText }
-                        });
+                        applyLocalAnnotationUpdate(id, { text: newText });
+                        await editOrDeleteComment("edit", { id, body: newText });
                       }}
                       onDeleteComment={async (id: string) => {
-                        setAnnotations((prev: Annotation[]) =>
-                          prev.map(a => a.id === id ? { ...a, isDeleted: true } : a)
-                        );
-                        // TODO: Call API to soft delete comment in database
-                        await invokeEdgeFunction("comment", {
-                          method: "PATCH",
-                          body: { id, status: "deleted" }
-                        });
+                        applyLocalAnnotationUpdate(id, { isDeleted: true });
+                        await editOrDeleteComment("delete", { id });
                       }}
-                      onToggleCompleted={async (id: string) => {
-                        setAnnotations((prev: Annotation[]) =>
-                          prev.map(a => a.id === id ? { ...a, isCompleted: !a.isCompleted } : a)
-                        );
+                      onToggleCompleted={canCompleteComments ? async (id: string) => {
+                        const target = annotations.find((a) => a.id === id);
+                        applyLocalAnnotationUpdate(id, { isCompleted: !target?.isCompleted });
                         // TODO: Call API to update completion status in database
                         await invokeEdgeFunction("comment", {
                           method: "PATCH",
-                          body: { id, status: "completed" }
+                          body: { id, status: "completed", ...(commentMutationContext ?? {}) }
                         });
-                      }}
+                      } : undefined}
 
                       // Context for enhanced mentions
                       projectId={projectId}
@@ -1194,12 +1671,13 @@ export default function ImageAnnotatorWithAnnotations({
                       // Asset data for Fields tab
                       asset={asset}
                       onAssetMetadataSave={onAssetMetadataSave}
+                      onRetagAsset={onRetagAsset}
+                      retagStatus={retagStatus}
                       profiles={profiles}
                     />
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+              </div>
+            ) : null}
           </div>
         </CardContent>
       </div>

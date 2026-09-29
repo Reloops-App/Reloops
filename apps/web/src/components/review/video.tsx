@@ -18,16 +18,42 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { cn, fmtHMSF, FPS, downloadFile } from "@/lib/utils";
-import { Play, Pause, Volume2, VolumeX, Maximize2, Captions, Download, AlertTriangle } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { cn, fmtHMSF, downloadAsset } from "@/lib/utils";
+import { resolveAssetDownloadUrl } from "@/lib/mediaDelivery";
+import type { CommentMutationContext } from "@/lib/shareGuestIdentity";
+import { Play, Pause, Volume2, VolumeX, Maximize2, Captions, Download, Loader2 } from "lucide-react";
 import { SeekBar } from "../video-player/seekbar";
 import CommentsPanel from "./CommentsPanel";
-import type { Annotation, Stroke, Tool } from "./annotator-utils";
-import { getDrawingBounds } from "./annotator-utils";
+import type { Annotation, Stroke } from "./annotator-utils";
+import { getDrawingBounds, mergeAnnotationOverrides } from "./annotator-utils";
 
 // Re-export for convenience
 export type { Annotation, Stroke };
+
+type ReviewAsset = {
+    id: string;
+    title: string;
+    description?: string | null;
+    tags?: string[] | null;
+    smart_tags?: string[] | null;
+    smart_description?: string | null;
+    status?: string | null;
+    assigned_to?: string | null;
+    uploaded_by?: string | null;
+    created_at: string;
+    updated_at?: string | null;
+    uploaded_at?: string;
+    mime_type?: string | null;
+    size_bytes?: number | null;
+    width?: number | null;
+    height?: number | null;
+    duration_ms?: number | null;
+    version_no?: number | null;
+    storage_path: string;
+    signed_url?: string | null;
+    delivery_url?: string | null;
+    cdn_url?: string | null;
+};
 
 export type VideoPlayerProps = {
     src?: string;
@@ -45,30 +71,25 @@ export type VideoPlayerProps = {
     assetId?: string | null;
 
     // Asset data for Fields tab
-    asset?: {
-        id: string;
-        title: string;
-        description?: string | null;
-        tags?: string[] | null;
-        smart_tags?: string[] | null;
-        smart_description?: string | null;
-    ai_description?: string | null;
-    ai_metadata?: Record<string, any> | null;
-        status?: string | null;
-        assigned_to?: string | null;
-        uploaded_by?: string | null;
-        created_at: string;
-        updated_at?: string | null;
-        uploaded_at?: string;
-        mime_type?: string | null;
-        size_bytes?: number | null;
-        width?: number | null;
-        height?: number | null;
-        duration_ms?: number | null;
-        version_no?: number | null;
-        storage_path: string;
-    } | null;
+    asset?: ReviewAsset | null;
     onAssetMetadataSave?: (patch: { description: string | null; tags: string[] }) => Promise<void> | void;
+    onRetagAsset?: () => void;
+    retagStatus?: "idle" | "queued" | "error";
+    commentsPanelOpen?: boolean;
+    onCommentsPanelOpenChange?: (open: boolean) => void;
+    commentMutationContext?: CommentMutationContext;
+    // Which edge function edit/delete/toggle calls target — defaults to the
+    // shared "comment" function used by every existing caller. A share flow
+    // with its own isolated comment function (e.g. project-share-comment)
+    // can point this elsewhere without changing behavior for anyone else.
+    commentEndpoint?: string;
+    isPreparingSource?: boolean;
+    loadingLabel?: string;
+    // Explicit download source for callers that don't pass a full `asset`
+    // object (the guest share pages) — the in-player Download button was inert
+    // for them because `handleDownload` needs `asset.storage_path`.
+    downloadUrl?: string | null;
+    downloadName?: string | null;
     profiles?: Record<string, {
         id: string;
         display_name?: string | null;
@@ -80,15 +101,13 @@ export type VideoPlayerProps = {
 import { useDrawing } from "./shared/useDrawing";
 import CanvasOverlay from "./shared/CanvasOverlay";
 import AnnotationToast from "./shared/AnnotationToast";
-import { getLoggedInUserProfile, supabase } from "@/lib/supabaseClient";
+import { getLoggedInUserProfile } from "@/lib/supabaseClient";
 import { invokeEdgeFunction } from "@/api/edge";
 import { ReviewModeBar, type ReviewMode } from "./shared/ReviewModeBar";
 import { InlineNoteComposer } from "./shared/InlineNoteComposer";
 
 
 
-// drawStrokes imported from shared utils
-import { VideoToolbar } from "./VideoToolbar";
 import { TikTokOverlay } from "./TikTokOverlay";
 import { SafeZoneOverlay, type SafeZoneAspectRatio } from "./SafeZoneOverlay";
 import { InstagramOverlay, type InstagramMode } from "./InstagramOverlay";
@@ -110,7 +129,7 @@ export default function VideoPlayerWithAnnotations({
     src: _src,
     videoUrl,
     poster,
-    annotations: annotationsProp = [],
+    annotations: annotationsProp,
     className,
     onAddAnnotation,
     projectId,
@@ -119,20 +138,47 @@ export default function VideoPlayerWithAnnotations({
     assetId,
     asset,
     onAssetMetadataSave,
+    onRetagAsset,
+    retagStatus,
+    commentsPanelOpen,
+    commentMutationContext,
+    commentEndpoint = "comment",
+    isPreparingSource = false,
+    loadingLabel = "Loading video...",
+    downloadUrl,
+    downloadName,
     profiles = {},
 }: VideoPlayerProps) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const [playing, setPlaying] = useState(false);
-    const [mediaError, setMediaError] = useState<string | null>(null);
     const [current, setCurrent] = useState(0);
     const [duration, setDuration] = useState(0);
+    const [buffering, setBuffering] = useState(false);
     const [volume, setVolume] = useState(1);
     const [muted, setMuted] = useState(false);
     const [rate, setRate] = useState(1);
     const [showToast, setShowToast] = useState<Annotation | null>(null);
     const [search, setSearch] = useState("");
-    const [panelOpen] = useState(true);
+    const panelOpen = commentsPanelOpen ?? true;
+    const canCompleteComments = !commentMutationContext?.share_token;
+
+    // Edit/delete target the "comment" function by default (unchanged for
+    // every existing caller). A share flow with its own isolated comment
+    // function passes commentEndpoint to route here instead — that function
+    // takes an action-based POST body rather than comment's PATCH-with-status.
+    const editOrDeleteComment = useCallback(async (action: "edit" | "delete", fields: { id: string; body?: string }) => {
+        if (commentEndpoint === "comment") {
+            const body: Record<string, unknown> = { id: fields.id, ...(commentMutationContext ?? {}) };
+            if (action === "edit") body.body = fields.body;
+            else body.status = "deleted";
+            return invokeEdgeFunction("comment", { method: "PATCH", body });
+        }
+        return invokeEdgeFunction(commentEndpoint, {
+            method: "POST",
+            body: { action, id: fields.id, body: fields.body, ...(commentMutationContext ?? {}) },
+        });
+    }, [commentEndpoint, commentMutationContext]);
 
     // —— NEW: annotation/drawing composer state ——
     const [includeTs, setIncludeTs] = useState(true);
@@ -157,59 +203,64 @@ export default function VideoPlayerWithAnnotations({
 
     // Prefer explicit src, fall back to videoUrl
     const videoSrc = _src ?? videoUrl;
-    const downloadName = asset?.title || "video";
+    const isVideoLoading = isPreparingSource || Boolean(videoSrc && buffering);
+    const handleDownload = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        event.preventDefault();
+        // Prefer the explicit download URL (guest pages pass it); fall back to
+        // the full asset object (authed ReviewAsset).
+        const url = downloadUrl ?? (asset?.storage_path ? resolveAssetDownloadUrl(asset) : null);
+        if (!url) return;
+        downloadAsset(url, downloadName ?? asset?.title ?? "video");
+    }, [asset, downloadUrl, downloadName]);
 
-    const handleDownload = useCallback(() => {
-        const storagePath = (asset as any)?.storage_path;
-        if (storagePath) {
-            const proxy = import.meta.env.VITE_ASSET_PUBLIC_BASE_URL || "";
-            const base = proxy.endsWith("/") ? proxy.slice(0, -1) : proxy;
-            const path = storagePath.startsWith("/") ? storagePath : `/${storagePath}`;
-            void downloadFile(`${base}${path}`, downloadName);
+    const enterFullscreen = useCallback(() => {
+        const el = containerRef.current;
+        const video = videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+        if (el?.requestFullscreen) {
+            void el.requestFullscreen().catch(() => {});
             return;
         }
-        if (videoSrc) {
-            void downloadFile(videoSrc, downloadName);
+        // iPhone Safari: no Element.requestFullscreen — fullscreen the <video>.
+        if (video?.webkitEnterFullscreen) {
+            try { video.webkitEnterFullscreen(); } catch { /* metadata not ready */ }
         }
-    }, [asset, downloadName, videoSrc]);
+    }, []);
 
-    const handleMediaFailure = useCallback((error?: unknown) => {
-        const videoError = videoRef.current?.error;
-        const message = videoError?.message || (error instanceof Error ? error.message : "");
-        console.warn("Video playback failed", {
-            src: videoSrc,
-            mimeType: asset?.mime_type,
-            error: message || error,
-        });
-        setPlaying(false);
-        setMediaError("This video format is not supported by this browser.");
-    }, [asset?.mime_type, videoSrc]);
-
+    // Holds only the fields the user has locally changed (delete/complete/
+    // edit), keyed by annotation id, re-applied on every sync below -- see
+    // mergeAnnotationOverrides for why: without it, deleting a comment and
+    // then adding another one (or anything else that refreshes
+    // annotationsProp) before the delete's own server round-trip/realtime
+    // echo lands would silently resurrect it, since the next prop sync
+    // still carries the pre-delete shape.
+    const [annotationOverrides, setAnnotationOverrides] = useState<Record<string, Partial<Annotation>>>({});
     const [annotations, setAnnotations] = useState<Annotation[]>([]);
 
-    // Sync with incoming props and maintain local state
+    // Sync with incoming props when the component is controlled by a parent.
     useEffect(() => {
-        if (annotationsProp && annotationsProp.length > 0) {
-            setAnnotations(annotationsProp);
-        }
-    }, [annotationsProp]);
+        if (annotationsProp) setAnnotations(mergeAnnotationOverrides(annotationsProp, annotationOverrides));
+    }, [annotationsProp, annotationOverrides]);
 
-    useEffect(() => {
-        setMediaError(null);
-        setPlaying(false);
-        setCurrent(0);
-        setDuration(0);
-    }, [videoSrc]);
+    const applyLocalAnnotationUpdate = useCallback((id: string, patch: Partial<Annotation>) => {
+        setAnnotationOverrides((current) => ({ ...current, [id]: { ...current[id], ...patch } }));
+        setAnnotations((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+    }, []);
+
+    const visibleAnnotations = useMemo(
+        () => annotations.filter((annotation) => !annotation.isDeleted),
+        [annotations]
+    );
 
     // allStrokes comes from useDrawing
 
     // Include persisted drawings for annotations near the current time (e.g., +/- 0.6s)
     const savedStrokes = useMemo<Stroke[]>(() => {
         const NEAR = 0.6;
-        return (annotations || [])
+        return visibleAnnotations
             .filter((a: Annotation) => Number.isFinite(a.time) && Math.abs((a.time as number) - current) < NEAR)
             .flatMap((a: Annotation) => a.drawing || []);
-    }, [annotations, current]);
+    }, [current, visibleAnnotations]);
     const draftAnchorBounds = useMemo(
         () => getDrawingBounds(draftStrokes),
         [draftStrokes]
@@ -242,6 +293,16 @@ export default function VideoPlayerWithAnnotations({
     }, []);
 
     useEffect(() => {
+        const v = videoRef.current;
+        setPlaying(false);
+        setBuffering(Boolean(videoSrc) && !isPreparingSource);
+        setCurrent(0);
+        setDuration(0);
+        if (!v || !videoSrc || isPreparingSource) return;
+        v.load();
+    }, [videoSrc, isPreparingSource]);
+
+    useEffect(() => {
         if (!videoRef.current) return;
         videoRef.current.volume = muted ? 0 : volume;
     }, [volume, muted]);
@@ -252,17 +313,16 @@ export default function VideoPlayerWithAnnotations({
     }, [rate]);
 
     useEffect(() => {
-        const near = annotations.find((a: Annotation) => Math.abs(a.time - current) < 0.6);
+        const near = visibleAnnotations.find((a: Annotation) => Math.abs(a.time - current) < 0.6);
         setShowToast(near ?? null);
-    }, [current, annotations]);
+    }, [current, visibleAnnotations]);
 
     const togglePlay = () => {
         const v = videoRef.current;
-        if (!v || mediaError) return;
+        if (!v || !videoSrc || isPreparingSource) return;
         if (v.paused) {
-            v.play()
-                .then(() => setPlaying(true))
-                .catch(handleMediaFailure);
+            void v.play();
+            setPlaying(true);
         } else {
             v.pause();
             setPlaying(false);
@@ -282,22 +342,23 @@ export default function VideoPlayerWithAnnotations({
     // Pointer handling is delegated to CanvasOverlay and useDrawing.
 
     const filteredAnnotations = useMemo(() => {
-        if (!search.trim()) return annotations;
-        return annotations.filter((a: Annotation) =>
+        if (!search.trim()) return visibleAnnotations;
+        return visibleAnnotations.filter((a: Annotation) =>
             `${a.text} ${a.author ?? ""}`.toLowerCase().includes(search.toLowerCase())
         );
-    }, [annotations, search]);
+    }, [search, visibleAnnotations]);
 
-    const [showTikTokPreview, setShowTikTokPreview] = useState(false);
-    const [showYouTubeShortsPreview, setShowYouTubeShortsPreview] = useState(false);
-    const [instagramMode, setInstagramMode] = useState<InstagramMode | null>(null);
-    const [safeZoneMode, setSafeZoneMode] = useState<SafeZoneAspectRatio | null>(null);
+    const [showTikTokPreview] = useState(false);
+    const [showYouTubeShortsPreview] = useState(false);
+    const [instagramMode] = useState<InstagramMode | null>(null);
+    const [safeZoneMode] = useState<SafeZoneAspectRatio | null>(null);
     const [viewMode, setViewMode] = useState<"player" | "preview">("player");
     const [reviewMode, setReviewMode] = useState<ReviewMode>("view");
 
     // Inline composer state for comment/draw modes
     const [inlineComposerOpen, setInlineComposerOpen] = useState(false);
     const [inlineComposerText, setInlineComposerText] = useState("");
+    const [dockComposerText, setDockComposerText] = useState("");
 
     const closeInlineComposer = useCallback(() => {
         setInlineComposerOpen(false);
@@ -335,12 +396,16 @@ export default function VideoPlayerWithAnnotations({
             <div className="border-0 rounded-none bg-background h-full">
                 <div className="p-0 h-full">
                     <div className="flex h-full min-h-0 w-full flex-col lg:flex-row">
-                        {/* Video area */}
-                        {/* Video area */}
+                        {/* Video area. On the mobile vertical stack it's sized to
+                            the video's own aspect ratio (capped) so a portrait
+                            "short" fills the width instead of floating in a black
+                            letterbox; the comments panel scrolls below. On lg+ it's
+                            the flex-1 stage next to the fixed sidebar. */}
                         <div
                             className={cn(
-                                "flex min-h-0 min-w-0 basis-[48%] flex-col bg-background lg:basis-auto lg:flex-1 lg:min-h-0 lg:h-full",
-                                panelOpen ? "lg:w-[calc(100%-360px)]" : "w-full"
+                                "relative flex min-h-0 min-w-0 shrink-0 flex-col bg-background",
+                                "lg:shrink lg:basis-auto lg:flex-1 lg:min-h-0 lg:h-full",
+                                panelOpen ? "lg:w-[calc(100%-360px)]" : "lg:w-full",
                             )}
                         >
                             {/* Unified mode bar: View | Comment | Draw */}
@@ -363,56 +428,86 @@ export default function VideoPlayerWithAnnotations({
                             />
 
                             {/* Video container - Flex center to handle aspect ratio wrapper */}
-                            <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black group">
+                            <div
+                                className={cn(
+                                    "group relative flex items-center justify-center overflow-hidden bg-black",
+                                    // mobile: the stage IS the video — sized to its own aspect
+                                    // (capped), centred. No black letterbox bars; the space
+                                    // beside a portrait clip is the column's own background.
+                                    "mx-auto aspect-[var(--stage-ar)] max-w-full",
+                                    panelOpen ? "max-h-[62svh]" : "max-h-[82svh]",
+                                    // lg+: fill the flex-1 stage, unchanged
+                                    "lg:mx-0 lg:aspect-auto lg:min-h-0 lg:h-full lg:w-full lg:max-h-none lg:flex-1",
+                                )}
+                                style={{ "--stage-ar": `${videoDimensions.width} / ${videoDimensions.height}` } as React.CSSProperties}
+                            >
 
-                                {mediaError ? (
-                                    <div className="flex max-w-md flex-col items-center px-6 text-center text-white">
-                                        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 text-white">
-                                            <AlertTriangle className="h-7 w-7" />
+                                {/* Aspect Ratio Wrapper */}
+                                <div
+                                    ref={containerRef}
+                                    className={cn(
+                                        "relative max-h-full max-w-full shadow-2xl transition-opacity duration-300",
+                                        viewMode === "preview" && "opacity-0 pointer-events-none",
+                                        reviewMode === "comment" && "cursor-copy",
+                                        reviewMode === "draw" && "cursor-crosshair"
+                                    )}
+                                    style={{
+                                        aspectRatio: `${videoDimensions.width} / ${videoDimensions.height}`
+                                    }}
+                                >
+                                    <video
+                                        ref={videoRef}
+                                        src={videoSrc || undefined}
+                                        poster={poster}
+                                        className="w-full h-full object-contain"
+                                        preload="metadata"
+                                        onLoadStart={() => setBuffering(Boolean(videoSrc) && !isPreparingSource)}
+                                        onLoadedMetadata={() => setBuffering(false)}
+                                        onWaiting={() => setBuffering(true)}
+                                        onCanPlay={() => setBuffering(false)}
+                                        onClick={() => {
+                                            if (reviewMode === "view") {
+                                                togglePlay();
+                                            }
+                                        }}
+                                        onPlay={() => setPlaying(true)}
+                                        onPlaying={() => {
+                                            setPlaying(true);
+                                            setBuffering(false);
+                                        }}
+                                        onPause={() => setPlaying(false)}
+                                        onEnded={() => setPlaying(false)}
+                                        controls={false}
+                                        playsInline
+                                    />
+
+                                    {isVideoLoading && playing ? (
+                                        <div className="pointer-events-none absolute bottom-3 right-3 z-30 flex items-center justify-center rounded-full bg-black/60 p-2 text-white shadow-lg backdrop-blur-sm">
+                                            <Loader2 className="h-4 w-4 animate-spin" />
                                         </div>
-                                        <h2 className="mt-5 text-xl font-semibold">Preview not available</h2>
-                                        <p className="mt-2 text-sm text-white/70">
-                                            {mediaError} MOV files often use QuickTime codecs that Chrome and some other browsers cannot play.
-                                        </p>
-                                        {videoSrc ? (
-                                            <Button className="mt-6" variant="secondary" onClick={handleDownload}>
-                                                <Download className="h-4 w-4" />
-                                                Download video
-                                            </Button>
-                                        ) : null}
-                                    </div>
-                                ) : (
-                                    <>
-                                        {/* Aspect Ratio Wrapper */}
-                                        <div
-                                            ref={containerRef}
+                                    ) : null}
+
+                                    {reviewMode === "view" && viewMode === "player" && !playing && videoSrc ? (
+                                        <button
+                                            type="button"
+                                            aria-label={isVideoLoading ? loadingLabel : "Play video"}
+                                            title={isVideoLoading ? loadingLabel : "Play video"}
                                             className={cn(
-                                                "relative max-h-full max-w-full shadow-2xl transition-opacity duration-300",
-                                                viewMode === "preview" && "opacity-0 pointer-events-none",
-                                                reviewMode === "comment" && "cursor-copy",
-                                                reviewMode === "draw" && "cursor-crosshair"
+                                                "absolute left-1/2 top-1/2 z-20 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/25 bg-black/45 text-white shadow-[0_18px_60px_rgba(0,0,0,0.45)] backdrop-blur-md ring-1 ring-white/10 transition-[opacity,transform,background-color,border-color] duration-150 hover:scale-105 hover:border-white/45 hover:bg-black/60 focus-visible:scale-105 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+                                                "opacity-100 scale-100"
                                             )}
-                                            style={{
-                                                aspectRatio: `${videoDimensions.width} / ${videoDimensions.height}`
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                togglePlay();
                                             }}
                                         >
-                                            <video
-                                                ref={videoRef}
-                                                src={videoSrc}
-                                                poster={poster}
-                                                className="w-full h-full object-cover"
-                                                onClick={() => {
-                                                    if (reviewMode === "view") {
-                                                        togglePlay();
-                                                    }
-                                                }}
-                                                onError={handleMediaFailure}
-                                                onLoadedMetadata={() => setMediaError(null)}
-                                                onPlay={() => setPlaying(true)}
-                                                onPause={() => setPlaying(false)}
-                                                controls={false}
-                                                playsInline
-                                            />
+                                            {isVideoLoading ? (
+                                                <Loader2 className="h-8 w-8 animate-spin" />
+                                            ) : (
+                                                <Play className="ml-1 h-8 w-8 fill-current" />
+                                            )}
+                                        </button>
+                                    ) : null}
 
                                     {/* Overlays - Now constrained to video size */}
                                     <TikTokOverlay visible={showTikTokPreview} />
@@ -437,7 +532,7 @@ export default function VideoPlayerWithAnnotations({
                                                 };
 
                                                 addStroke(createAnchorStroke(point, color), true);
-                                                setInlineComposerText("");
+                                                setInlineComposerText(dockComposerText);
                                                 setInlineComposerOpen(true);
                                             }}
                                         />
@@ -454,7 +549,7 @@ export default function VideoPlayerWithAnnotations({
                                             const hadActiveStroke = !!activeStroke;
                                             pointerUp();
                                             if (!hadActiveStroke) return;
-                                            setInlineComposerText("");
+                                            setInlineComposerText(dockComposerText);
                                             setInlineComposerOpen(true);
                                         }}
                                         onPointerCancel={pointerCancel}
@@ -488,10 +583,17 @@ export default function VideoPlayerWithAnnotations({
                                         >
                                             <InlineNoteComposer
                                                 value={inlineComposerText}
-                                                onChange={setInlineComposerText}
+                                                onChange={(value) => {
+                                                    setInlineComposerText(value);
+                                                    setDockComposerText(value);
+                                                }}
                                                 color={color}
                                                 label={reviewMode === "comment" ? "Add note at this frame" : "Describe your annotation"}
                                                 hint={`Timestamp: ${fmtHMSF(current)}`}
+                                                projectId={projectId}
+                                                organizationId={organizationId}
+                                                workspaceId={workspaceId}
+                                                assetId={assetId}
                                                 onCancel={closeInlineComposer}
                                                 onSubmit={async () => {
                                                     const text = inlineComposerText.trim();
@@ -509,8 +611,11 @@ export default function VideoPlayerWithAnnotations({
                                                             emoji: {},
                                                             drawing: [...allStrokes],
                                                         };
-                                                        setAnnotations((prev) => { if (prev.some(a => a.id === payload.id)) return prev; return [...prev, payload]; });
+                                                        if (!onAddAnnotation) {
+                                                            setAnnotations((prev) => { if (prev.some(a => a.id === payload.id)) return prev; return [...prev, payload]; });
+                                                        }
                                                         closeInlineComposer();
+                                                        setDockComposerText("");
                                                         setReviewMode("view");
                                                         if (onAddAnnotation) await onAddAnnotation(payload);
                                                     } catch (err) { console.error("Failed to submit comment:", err); }
@@ -518,16 +623,14 @@ export default function VideoPlayerWithAnnotations({
                                             />
                                         </div>
                                     ) : null}
-                                        </div>
+                                </div>
 
-                                        {/* Dedicated Device Preview Mode */}
-                                        <DedicatedDevicePreview
-                                            videoSrc={videoSrc}
-                                            videoRef={videoRef}
-                                            visible={viewMode === "preview"}
-                                        />
-                                    </>
-                                )}
+                                {/* Dedicated Device Preview Mode */}
+                                <DedicatedDevicePreview
+                                    videoSrc={videoSrc}
+                                    videoRef={videoRef}
+                                    visible={viewMode === "preview"}
+                                />
 
                                 {/* Floating Toolbar - Stays in the corner of the black area */}
                                 {/* <div className={cn(
@@ -552,14 +655,14 @@ export default function VideoPlayerWithAnnotations({
                                 <SeekBar
                                     current={current}
                                     duration={duration}
-                                    annotations={annotations}
+                                    annotations={visibleAnnotations}
                                     onSeek={seekTo}
                                 />
                             </div>
 
                             {/* Mobile controls - outside video */}
                             <div className="flex items-center gap-2 border-t bg-background px-3 py-2 md:hidden flex-shrink-0">
-                                <Button variant="ghost" size="icon" onClick={togglePlay} disabled={!!mediaError} className="h-8 w-8 shrink-0">
+                                <Button variant="ghost" size="icon" onClick={togglePlay} className="h-8 w-8 shrink-0">
                                     {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                                 </Button>
                                 <div className="min-w-0 rounded bg-muted px-2 py-1 text-xs tabular-nums">
@@ -595,11 +698,7 @@ export default function VideoPlayerWithAnnotations({
                                         variant="ghost"
                                         size="icon"
                                         className="h-8 w-8 shrink-0"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            e.preventDefault();
-                                            handleDownload();
-                                        }}
+                                        onClick={handleDownload}
                                     >
                                         <Download className="h-4 w-4" />
                                     </Button>
@@ -607,7 +706,7 @@ export default function VideoPlayerWithAnnotations({
                                         variant="ghost"
                                         size="icon"
                                         className="h-8 w-8 shrink-0"
-                                        onClick={() => containerRef.current?.requestFullscreen?.()}
+                                        onClick={enterFullscreen}
                                     >
                                         <Maximize2 className="h-4 w-4" />
                                     </Button>
@@ -616,7 +715,7 @@ export default function VideoPlayerWithAnnotations({
 
                             {/* Desktop controls bar - outside video */}
                             <div className="hidden md:flex flex-wrap items-center gap-x-2 gap-y-2 border-t bg-background px-3 py-2 flex-shrink-0">
-                                <Button variant="ghost" size="icon" onClick={togglePlay} disabled={!!mediaError}>
+                                <Button variant="ghost" size="icon" onClick={togglePlay}>
                                     {playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
                                 </Button>
                                 <div className="text-xs tabular-nums bg-muted rounded px-2 py-1">
@@ -684,11 +783,7 @@ export default function VideoPlayerWithAnnotations({
                                                 <Button
                                                     variant="ghost"
                                                     size="icon"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        e.preventDefault();
-                                                        handleDownload();
-                                                    }}
+                                                    onClick={handleDownload}
                                                 >
                                                     <Download className="h-5 w-5" />
                                                 </Button>
@@ -700,7 +795,7 @@ export default function VideoPlayerWithAnnotations({
                                                 <Button
                                                     variant="ghost"
                                                     size="icon"
-                                                    onClick={() => containerRef.current?.requestFullscreen?.()}
+                                                    onClick={enterFullscreen}
                                                 >
                                                     <Maximize2 className="h-5 w-5" />
                                                 </Button>
@@ -713,15 +808,8 @@ export default function VideoPlayerWithAnnotations({
                         </div>
 
                         {/* Right panel — shared */}
-                        <AnimatePresence>
-                            {panelOpen && (
-                                <motion.div
-                                    initial={{ x: 40, opacity: 0 }}
-                                    animate={{ x: 0, opacity: 1 }}
-                                    exit={{ x: 40, opacity: 0 }}
-                                    transition={{ duration: 0.18 }}
-                                    className="flex min-h-0 flex-1 w-full flex-col lg:h-full lg:w-auto lg:flex-none"
-                                >
+                        {panelOpen ? (
+                            <div className="flex min-h-0 flex-1 w-full flex-col lg:h-full lg:w-auto lg:flex-none">
                                     <CommentsPanel
                                         items={filteredAnnotations.map((a: Annotation) => ({
                                             id: a.id,
@@ -733,6 +821,8 @@ export default function VideoPlayerWithAnnotations({
                                             timeSec: a.time,
                                             isCompleted: a.isCompleted,
                                             isDeleted: a.isDeleted,
+                                            canManageComment: a.canManageComment,
+                                            canDeleteComment: a.canDeleteComment,
                                             createdAt: a.createdAt,
                                         }))}
                                         onItemClick={(id) => {
@@ -748,6 +838,12 @@ export default function VideoPlayerWithAnnotations({
                                         formatTime={fmtHMSF}
                                         annotating={reviewMode === "draw"}
                                         onToggleAnnotating={() => setReviewMode(reviewMode === "draw" ? "view" : "draw")}
+                                        reviewMode={reviewMode === "comment" || reviewMode === "draw" ? reviewMode : "view"}
+                                        onReviewModeChange={(mode) => {
+                                            closeInlineComposer();
+                                            setViewMode("player");
+                                            setReviewMode(mode);
+                                        }}
                                         tool={tool}
                                         onToolChange={setTool}
                                         color={color}
@@ -768,17 +864,18 @@ export default function VideoPlayerWithAnnotations({
                                                     drawing: [...draftStrokes], // Create a copy to avoid reference issues
                                                 };
 
-                                                // Add to local state immediately for optimistic updates
-                                                setAnnotations((prev: Annotation[]) => {
-                                                    // Check if annotation already exists to prevent duplicates
-                                                    const exists = prev.some(a => a.id === payload.id);
-                                                    if (exists) return prev;
-                                                    return [...prev, payload];
-                                                });
+                                                if (!onAddAnnotation) {
+                                                    setAnnotations((prev: Annotation[]) => {
+                                                        const exists = prev.some(a => a.id === payload.id);
+                                                        if (exists) return prev;
+                                                        return [...prev, payload];
+                                                    });
+                                                }
 
                                                 // Clear UI state immediately
                                                 setSearch("");
                                                 setReviewMode("view");
+                                                setDockComposerText("");
                                                 clearStrokes();
 
                                                 // Call external handler if provided
@@ -791,49 +888,37 @@ export default function VideoPlayerWithAnnotations({
                                                 // Could revert optimistic update here if needed
                                             }
                                         }}
+                                        commentValue={dockComposerText}
+                                        onCommentChange={setDockComposerText}
 
                                         // Comment actions
                                         onEditComment={async (id: string, newText: string) => {
-                                            setAnnotations((prev: Annotation[]) =>
-                                                prev.map(a => a.id === id ? { ...a, text: newText } : a)
-                                            );
-                                            await invokeEdgeFunction("comment", {
-                                                method: "PATCH",
-                                                body: { id, body: newText }
-                                            });
+                                            applyLocalAnnotationUpdate(id, { text: newText });
+                                            await editOrDeleteComment("edit", { id, body: newText });
                                         }}
                                         onDeleteComment={async (id: string) => {
-                                            setAnnotations((prev: Annotation[]) =>
-                                                prev.map(a => a.id === id ? { ...a, isDeleted: true } : a)
-                                            );
-                                            await invokeEdgeFunction("comment", {
-                                                method: "PATCH",
-                                                body: { id, status: "deleted" }
-                                            });
+                                            applyLocalAnnotationUpdate(id, { isDeleted: true });
+                                            await editOrDeleteComment("delete", { id });
                                         }}
-                                        onToggleCompleted={async (id: string) => {
+                                        onToggleCompleted={canCompleteComments ? async (id: string) => {
                                             const annotation = annotations.find(a => a.id === id);
                                             const newCompleted = !annotation?.isCompleted;
 
                                             // Optimistic update
-                                            setAnnotations((prev: Annotation[]) =>
-                                                prev.map(a => a.id === id ? { ...a, isCompleted: newCompleted } : a)
-                                            );
+                                            applyLocalAnnotationUpdate(id, { isCompleted: newCompleted });
 
                                             // Update database
                                             const { error } = await invokeEdgeFunction("comment", {
                                                 method: "PATCH",
-                                                body: { id, status: newCompleted ? 'completed' : 'active' }
+                                                body: { id, status: newCompleted ? 'completed' : 'active', ...(commentMutationContext ?? {}) }
                                             });
 
                                             if (error) {
                                                 console.error("Failed to toggle completion status", error);
                                                 // Revert on error
-                                                setAnnotations((prev: Annotation[]) =>
-                                                    prev.map(a => a.id === id ? { ...a, isCompleted: annotation?.isCompleted } : a)
-                                                );
+                                                applyLocalAnnotationUpdate(id, { isCompleted: annotation?.isCompleted });
                                             }
-                                        }}
+                                        } : undefined}
 
                                         // Context for enhanced mentions
                                         projectId={projectId}
@@ -844,11 +929,12 @@ export default function VideoPlayerWithAnnotations({
                                         // Asset data for Fields tab
                                         asset={asset}
                                         onAssetMetadataSave={onAssetMetadataSave}
+                                        onRetagAsset={onRetagAsset}
+                                        retagStatus={retagStatus}
                                         profiles={profiles}
                                     />
-                                </motion.div>
-                            )}
-                        </AnimatePresence>
+                            </div>
+                        ) : null}
                     </div>
                 </div >
             </div >
