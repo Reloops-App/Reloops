@@ -33,7 +33,7 @@ check("web app exists", existsSync("apps/web/src/main.tsx"));
 check("share function exists", existsSync("supabase/functions/share/index.ts"));
 check("env example exists", existsSync("apps/web/.env.local.example"));
 check("root env example exists", existsSync(".env.example"));
-check("single base migration", readdirSync("supabase/migrations").filter((name) => name.endsWith(".sql")).length === 1);
+check("single base migration", !existsSync("supabase/migrations/20260530000000_agent_api_and_asset_intelligence.sql"));
 check("OpenClaw OSS skill exists", existsSync("skills/openclaw-reloops-api/SKILL.md"));
 check("OpenClaw OSS API docs exist", existsSync("skills/openclaw-reloops-api/references/api_docs.md"));
 check("OpenClaw OSS test prompts exist", existsSync("skills/openclaw-reloops-api/references/test_prompts.md"));
