@@ -78,3 +78,21 @@ test("runtime web configuration injects public settings, excludes service keys, 
     assert.throws(() => configureDockerWeb({ source, target, envPath }), /configuration is missing/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("startup waits for stable project sharing readiness, not just bootstrap", async () => {
+  const { waitForFunctions } = await import("./wait-functions.mjs");
+  let attempts = 0;
+  await waitForFunctions({ pollIntervalMs: 1, timeoutMs: 2000, fetchImpl: async (url, options) => {
+    if (url.endsWith("/bootstrap")) return new Response("Unauthorized", { status: 401 });
+    assert.equal(options.method, "POST");
+    assert.equal(JSON.parse(options.body).action, "get");
+    attempts += 1;
+    // A transient upstream failure must reset consecutive readiness.
+    if (attempts === 1 || attempts === 3) return new Response("Bad gateway", { status: 502 });
+    return Response.json({ error: "Share link not found" }, { status: 404 });
+  }});
+  assert.equal(attempts, 5);
+  await assert.rejects(waitForFunctions({ pollIntervalMs: 1, timeoutMs: 5, fetchImpl: async () => {
+    throw new Error("Backend unavailable");
+  }}), /startup timeout/);
+});
