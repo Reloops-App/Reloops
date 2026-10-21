@@ -54,7 +54,16 @@ Deno.serve(async (req) => {
       if (!access.ok) return json({ error: access.status === 401 ? "Unauthorized" : "Forbidden" }, { status: access.status });
       const { data, error } = await admin.from("asset_comments").select("*").eq("asset_id", assetId).neq("status", "deleted").order("created_at");
       if (error) throw error;
-      return json({ data });
+      const authorIds = [...new Set((data ?? []).map((row) => row.author_user_id).filter(Boolean))];
+      const { data: authorProfiles } = authorIds.length
+        ? await admin.from("profiles").select("id, display_name, avatar_url").in("id", authorIds)
+        : { data: [] };
+      const profiles = Object.fromEntries((authorProfiles ?? []).map((profile) => [profile.id, profile]));
+      return json({ data: (data ?? []).map((row) => ({
+        ...row,
+        ms_offset: row.ms_offset ?? row.media_ms,
+        drawing_json: row.drawing_json ?? row.marker,
+      })), profiles });
     }
     const body = await readBody(req);
     if (req.method === "PATCH") {
@@ -72,6 +81,14 @@ Deno.serve(async (req) => {
       const patch: Record<string, unknown> = {};
       for (const key of ["body", "status", "media_ms", "marker"]) {
         if (key in body) patch[key] = body[key];
+      }
+      if ("drawing_json" in body || "marker" in body) {
+        patch.drawing_json = body.drawing_json ?? body.marker;
+        patch.marker = patch.drawing_json;
+      }
+      if ("ms_offset" in body || "media_ms" in body) {
+        patch.ms_offset = body.ms_offset ?? body.media_ms;
+        patch.media_ms = patch.ms_offset;
       }
       const { data, error } = await admin
         .from("asset_comments")
@@ -98,7 +115,9 @@ Deno.serve(async (req) => {
       guest_email: body.guest_email ?? body.guestEmail ?? null,
       author_api_key_id: body.author_api_key_id ?? null,
       media_ms: body.media_ms ?? body.ms_offset ?? null,
+      ms_offset: body.ms_offset ?? body.media_ms ?? null,
       marker: body.marker ?? body.drawing_json ?? null,
+      drawing_json: body.drawing_json ?? body.marker ?? null,
     }).select("*").single();
     if (error) throw error;
     return json({ data });

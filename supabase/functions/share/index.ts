@@ -59,6 +59,13 @@ async function getAsset(assetId: string) {
   return data;
 }
 
+// Only the public bits the collection header shows ("Created by" name and avatar).
+async function getCreatorProfile(userId: unknown) {
+  if (typeof userId !== "string" || !userId) return null;
+  const { data } = await admin.from("profiles").select("display_name, avatar_url").eq("id", userId).maybeSingle();
+  return data ?? null;
+}
+
 async function getCollection(collectionId: string) {
   const { data, error } = await admin.from("collections").select("*").eq("id", collectionId).maybeSingle();
   if (error || !data) return null;
@@ -260,9 +267,10 @@ async function getCollectionShare(req: Request, body: any) {
   const collection = await getCollection(share.subject_id);
   if (!collection) return json({ error: "Collection not found" }, { status: 404 });
 
-  const [{ rows, folders }, user] = await Promise.all([
+  const [{ rows, folders }, user, creatorProfile] = await Promise.all([
     resolveSharedCollectionRows(collection),
     getUser(req),
+    getCreatorProfile(collection.created_by),
   ]);
   const signedRows = await Promise.all(rows.map(async (row) => {
     const path = typeof row.asset.storage_path === "string" ? row.asset.storage_path : "";
@@ -287,6 +295,7 @@ async function getCollectionShare(req: Request, body: any) {
       rows: signedRows,
       folders,
       is_member: isMember,
+      creator_profile: creatorProfile,
     },
   });
 }

@@ -78,6 +78,7 @@ export default function ShareAsset() {
     const [error, setError] = useState<"not_found" | "expired" | "revoked" | "unknown" | null>(null);
     const [share, setShare] = useState<ShareLink | null>(null);
     const [comments, setComments] = useState<CommentRow[]>([]);
+    const [commentProfiles, setCommentProfiles] = useState<Record<string, { display_name?: string | null; avatar_url?: string | null }>>({});
 
     // Auth / Identity state
     const [identity, setIdentity] = useState<Identity | null>(null);
@@ -222,7 +223,7 @@ export default function ShareAsset() {
 	                    setShare(shareData);
 	                }
 
-                const commentUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/comment?share_token=${encodeURIComponent(token)}`;
+                const commentUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/comment?asset_id=${encodeURIComponent(shareData.assets.id)}&share_token=${encodeURIComponent(token)}`;
 	                const commentRes = await fetch(commentUrl, {
 	                    headers: buildEdgeHeaders(accessToken)
 	                });
@@ -232,7 +233,10 @@ export default function ShareAsset() {
                     console.error("Failed to load comments", errText);
                 } else {
                     const commentJson = await commentRes.json();
-                    if (mounted) setComments((commentJson?.data ?? []) as CommentRow[]);
+                    if (mounted) {
+                        setComments((commentJson?.data ?? []) as CommentRow[]);
+                        setCommentProfiles(commentJson?.profiles ?? {});
+                    }
                 }
 
                 // Only set loading to false if we didn't redirect
@@ -263,14 +267,14 @@ export default function ShareAsset() {
                 ...c,
                 time: timeSec,
                 drawing: c.drawing_json,
-                author: c.guest_name ?? "Guest",
+                author: c.author_user_id ? commentProfiles[c.author_user_id]?.display_name ?? "Team member" : c.guest_name ?? "Guest",
             });
             return {
                 ...base,
-                author: c.guest_name ?? base.author,
+                author: base.author,
             } as Annotation;
         });
-    }, [comments]);
+    }, [comments, commentProfiles]);
 
     const submitAnnotation = useCallback(async (annotation: Annotation, activeIdentity: Identity) => {
         if (!asset?.id || !token) return false;

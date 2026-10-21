@@ -79,6 +79,7 @@ export default function ShareCollectionAsset() {
   const [share, setShare] = useState<CollectionShareLink | null>(null);
   const [asset, setAsset] = useState<SharedAsset | null>(null);
   const [comments, setComments] = useState<CommentRow[]>([]);
+    const [commentProfiles, setCommentProfiles] = useState<Record<string, { display_name?: string | null; avatar_url?: string | null }>>({});
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [checkingIdentity, setCheckingIdentity] = useState(true);
   const [identityPromptOpen, setIdentityPromptOpen] = useState(false);
@@ -196,6 +197,7 @@ export default function ShareCollectionAsset() {
         const commentPayload = await commentRes.json();
         if (mounted) {
           setComments((commentPayload?.data ?? []) as CommentRow[]);
+          setCommentProfiles(commentPayload?.profiles ?? {});
           setLoading(false);
         }
       } catch (nextError: any) {
@@ -254,14 +256,14 @@ export default function ShareCollectionAsset() {
         ...comment,
         time: timeSec,
         drawing: comment.drawing_json,
-        author: comment.guest_name ?? "Guest",
+        author: comment.author_user_id ? commentProfiles[comment.author_user_id]?.display_name ?? "Team member" : comment.guest_name ?? "Guest",
       });
       return {
         ...base,
-        author: comment.guest_name ?? base.author,
+        author: base.author,
       } as Annotation;
     });
-  }, [comments]);
+  }, [comments, commentProfiles]);
 
   const handleIdentity = (guestIdentity: { type: "guest"; name: string; email: string }) => {
     setIdentity(guestIdentity);
