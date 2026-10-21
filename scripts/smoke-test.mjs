@@ -90,8 +90,10 @@ for (const bucket of ["assets", "thumbnails", "avatars", "workspaces"]) {
 check("full stack Dockerfile exists", existsSync("Dockerfile"));
 check("full stack Docker Compose exists", existsSync("docker-compose.yml"));
 check("Docker Compose starts reloops service", dockerCompose.includes("reloops:"));
-check("Docker Compose uses host networking for Supabase CLI", dockerCompose.includes("network_mode: host"));
-check("Docker Compose mounts repo at host path", dockerCompose.includes(".:${RELOOPS_HOST_PATH:-${PWD}}"));
+check("Docker Compose publishes the web app on localhost", dockerCompose.includes("127.0.0.1:${RELOOPS_WEB_PORT:-6173}:6173"));
+check("Docker Compose only mounts backend files at the host path", dockerCompose.includes("./supabase:${RELOOPS_HOST_PATH:-${PWD}}/supabase") && !dockerCompose.includes(".:${"));
+check("Docker image serves built web assets", dockerfile.includes("/app/apps/web/dist /opt/reloops-web"));
+check("Docker startup does not reset the database", !file("scripts/docker-start.sh").includes("db reset"));
 check("Docker Compose provides Docker socket for Supabase CLI", dockerCompose.includes("/var/run/docker.sock:/var/run/docker.sock"));
 check("Docker image includes Supabase CLI", dockerfile.includes("npm install \"supabase@"));
 check("Docker start script exists", existsSync("scripts/docker-start.sh"));

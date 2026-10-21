@@ -1,0 +1,58 @@
+name: Docker
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.119.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: docker compose up -d --build --wait --wait-timeout 600
+      - name: Configure host test credentials
+        run: |
+          node scripts/setup.mjs --quiet
+          pnpm sync-env
+      - run: pnpm test:runtime
+      - run: pnpm test:integration
+        env:
+          RELOOPS_TEST_URL: http://127.0.0.1:6173
+          RELOOPS_TEST_DOCKER: "1"
+      - name: Collect Docker logs
+        if: always()
+        run: |
+          mkdir -p docker-test-logs
+          docker compose logs --no-color > docker-test-logs/app.log
+          docker ps -a > docker-test-logs/containers.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-test-reports
+          path: |
+            docker-test-logs
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+      - run: sh scripts/docker-stop.sh
+        if: always()

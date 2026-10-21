@@ -1,0 +1,89 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-test-reports
+          path: |
+            apps/web/coverage
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.98.2
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Start a fresh local backend
+        run: |
+          node scripts/setup.mjs --quiet
+          supabase start
+          supabase db push --local --yes
+          pnpm sync-env
+          pnpm storage:ensure
+          supabase functions serve --env-file .env > /tmp/reloops-functions.log 2>&1 &
+          pnpm worker:asset-intelligence > /tmp/reloops-worker.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            status=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:56321/functions/v1/bootstrap || true)
+            if [ "$status" = "401" ]; then exit 0; fi
+            sleep 2
+          done
+          cat /tmp/reloops-functions.log
+          exit 1
+      - run: pnpm test:runtime
+      - run: pnpm test:integration
+      - name: Collect backend logs
+        if: always()
+        run: |
+          mkdir -p backend-test-logs
+          cp /tmp/reloops-functions.log /tmp/reloops-worker.log backend-test-logs/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-test-reports
+          path: |
+            backend-test-logs
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+      - run: supabase stop --no-backup
+        if: always()

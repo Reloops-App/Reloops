@@ -25,7 +25,14 @@ assert(url && anonKey && serviceKey, "local Supabase env is present");
 const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
 const email = `smoke-${Date.now()}@example.test`;
 const password = "Smoke-test-password-1";
+const testUserIds = [];
+const storageObjects = new Map();
+function trackStorage(bucket, path) {
+  if (!storageObjects.has(bucket)) storageObjects.set(bucket, new Set());
+  storageObjects.get(bucket).add(path);
+}
 
+try {
 const created = await admin.auth.admin.createUser({
   email,
   password,
@@ -34,6 +41,7 @@ const created = await admin.auth.admin.createUser({
 });
 if (created.error) throw created.error;
 assert(created.data.user?.id, "test user created");
+testUserIds.push(created.data.user.id);
 
 const client = createClient(url, anonKey, { auth: { persistSession: false } });
 const signedIn = await client.auth.signInWithPassword({ email, password });
@@ -144,6 +152,7 @@ assert(Array.isArray(folderList.data) && folderList.data.some((folder) => folder
 
 const objectId = crypto.randomUUID();
 const storagePath = `${workspace.id}/${project.id}/${objectId}.txt`;
+trackStorage("assets", storagePath);
 const file = new Blob(["hello from runtime smoke"], { type: "text/plain" });
 const upload = await client.storage.from("assets").upload(storagePath, file, {
   contentType: "text/plain",
@@ -185,6 +194,7 @@ assert(assetUpdate.data?.title === "runtime-smoke-renamed.txt", "asset update fu
 
 const detachObjectId = crypto.randomUUID();
 const detachStoragePath = `${workspace.id}/${project.id}/${detachObjectId}.txt`;
+trackStorage("assets", detachStoragePath);
 const detachFile = new Blob(["detachable asset"], { type: "text/plain" });
 const detachUpload = await client.storage.from("assets").upload(detachStoragePath, detachFile, {
   contentType: "text/plain",
@@ -236,6 +246,7 @@ const commentPatch = await invokeFunction("comment", {
 assert(commentPatch.data?.status === "completed", "comment patch function works");
 
 async function uploadPublicBucket(bucket, path) {
+  trackStorage(bucket, path);
   const blob = new Blob(["oss smoke"], { type: "text/plain" });
   const result = await client.storage.from(bucket).upload(path, blob, {
     contentType: "text/plain",
@@ -337,6 +348,7 @@ assert(await agentUploadedObject.text() === "agent uploaded asset", "agent api u
 
 const secondObjectId = crypto.randomUUID();
 const secondStoragePath = `${workspace.id}/${project.id}/${secondObjectId}.txt`;
+trackStorage("assets", secondStoragePath);
 const secondFile = new Blob(["second asset"], { type: "text/plain" });
 const secondUpload = await client.storage.from("assets").upload(secondStoragePath, secondFile, {
   contentType: "text/plain",
@@ -522,6 +534,8 @@ assert(approval.response.ok && approvedRow.status === "approved" && approvedRow.
 const guestPng = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 const presign = await callFunction("project-share-upload", { action: "presign", token: portal.id, password: portalPassword, fileName: "guest upload.png", contentType: "image/png", sizeBytes: guestPng.length, clientNonce: crypto.randomUUID() });
 assert(presign.response.ok && presign.payload?.url && presign.payload.objectKey.startsWith(`${workspace.id}/${project.id}/`), "guest gets a signed upload URL inside the project");
+trackStorage("assets", presign.payload.objectKey);
+trackStorage("thumbnails", `${workspace.id}/${presign.payload.assetId}.jpg`);
 const put = await fetch(presign.payload.url, { method: "PUT", headers: { "content-type": "image/png" }, body: guestPng });
 assert(put.ok, "guest PUTs the file straight to storage");
 const complete = await callFunction("project-share-upload", { action: "complete", token: portal.id, password: portalPassword, assetId: presign.payload.assetId, fileName: "guest upload.png", contentType: "image/png", sizeBytes: guestPng.length, objectKey: presign.payload.objectKey, guest_name: "Portal Guest", guest_email: "guest@example.test" });
@@ -558,4 +572,57 @@ await callFunction("project-share", { action: "revoke", share_link_id: portal.id
 const revokedPortal = await callFunction("project-share", { action: "get", token: portal.id, password: portalPassword });
 assert(revokedPortal.response.status === 403, "revoked project portal is inaccessible immediately");
 
+const revokedUpload = await callFunction("project-share-upload", { action: "presign", token: portal.id, password: portalPassword, fileName: "revoked.pdf", contentType: "application/pdf", sizeBytes: 100 });
+assert(revokedUpload.response.status === 403, "revoked links cannot upload");
+const invalidCover = await callFunction("project-share-upload", { action: "set-preview", token: folderPortal.id, assetId: folderAsset.id, cover_b64: "not-a-jpeg" });
+assert(invalidCover.response.status === 403, "guests cannot replace a member's thumbnail");
+
+const outsiderEmail = `outsider-${Date.now()}@example.test`;
+const outsiderCreated = await admin.auth.admin.createUser({ email: outsiderEmail, password, email_confirm: true });
+if (outsiderCreated.error) throw outsiderCreated.error;
+testUserIds.push(outsiderCreated.data.user.id);
+const outsider = createClient(url, anonKey, { auth: { persistSession: false } });
+const outsiderLogin = await outsider.auth.signInWithPassword({ email: outsiderEmail, password });
+if (outsiderLogin.error) throw outsiderLogin.error;
+const outsiderRead = await outsider.from("assets").select("id").eq("id", asset.id);
+assert(!outsiderRead.error && outsiderRead.data.length === 0, "RLS hides another workspace's assets");
+const outsiderWrite = await outsider.from("assets").update({ title: "unauthorized" }).eq("id", asset.id).select("id");
+assert(!outsiderWrite.error && outsiderWrite.data.length === 0, "RLS blocks another workspace's asset updates");
+const outsiderDownload = await outsider.storage.from("assets").download(storagePath);
+assert(Boolean(outsiderDownload.error), "private originals cannot be downloaded by another workspace's member");
+const publicOriginal = await fetch(`${url}/storage/v1/object/public/assets/${storagePath}`);
+assert(!publicOriginal.ok, "private originals cannot be downloaded through the public URL");
+
 console.log("\nruntime smoke passed");
+} finally {
+  // Delete only resources owned by users created by this run, even on failure.
+  if (testUserIds.length) {
+    const organizations = await admin.from("organizations").select("id").in("created_by", testUserIds);
+    if (organizations.error) throw organizations.error;
+    const organizationIds = (organizations.data ?? []).map(row => row.id);
+    if (organizationIds.length) {
+      const workspaces = await admin.from("workspaces").select("id").in("organization_id", organizationIds);
+      if (workspaces.error) throw workspaces.error;
+      const workspaceIds = (workspaces.data ?? []).map(row => row.id);
+      if (workspaceIds.length) {
+        const assets = await admin.from("assets").select("storage_path,thumbnail_path").in("workspace_id", workspaceIds);
+        if (assets.error) throw assets.error;
+        for (const row of assets.data ?? []) {
+          if (row.storage_path) trackStorage("assets", row.storage_path);
+          if (row.thumbnail_path) trackStorage("thumbnails", row.thumbnail_path);
+        }
+      }
+      for (const [bucket, paths] of storageObjects) {
+        const removed = await admin.storage.from(bucket).remove([...paths]);
+        if (removed.error) throw removed.error;
+      }
+      const deleted = await admin.from("organizations").delete().in("id", organizationIds);
+      if (deleted.error) throw deleted.error;
+    }
+    for (const id of testUserIds) {
+      const deleted = await admin.auth.admin.deleteUser(id);
+      if (deleted.error) throw deleted.error;
+    }
+    console.log("ok temporary runtime test data cleaned up");
+  }
+}

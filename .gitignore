@@ -14,3 +14,15 @@ supabase/.temp
 apps/**/dist
 apps/**/node_modules
 *.log
+coverage/
+playwright-report/
+test-results/
+backend-test-logs/
+docker-test-logs/
+
+# Local demo recordings, fixtures, and rendering scripts.
+/artifacts/
+
+# Locally installed demo skill and its installer state.
+/.agents/skills/video-demo/
+/skills-lock.json
