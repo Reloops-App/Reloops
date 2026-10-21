@@ -84,6 +84,7 @@ export function inferFileContentType(file: Pick<File, "name" | "type">) {
     if (fileName.endsWith(".mp4")) return "video/mp4";
     if (fileName.endsWith(".webm")) return "video/webm";
     if (fileName.endsWith(".mkv")) return "video/x-matroska";
+    if (fileName.endsWith(".pdf")) return "application/pdf";
 
     return browserType || "application/octet-stream";
 }
@@ -370,9 +371,35 @@ function canBrowserDecodeVideoType(contentType: string): boolean {
     return video.canPlayType(contentType) !== "";
 }
 
+async function makePdfThumbnail(file: File): Promise<Blob | null> {
+    // Use the same PDF.js version and local worker as the PDF review viewer.
+    const { pdfjs } = await import("react-pdf");
+    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+    const loadingTask = pdfjs.getDocument({ data: await file.arrayBuffer() });
+    // Password-protected files should still upload without waiting for a prompt.
+    loadingTask.onPassword = () => { void loadingTask.destroy(); };
+    try {
+        const pdf = await loadingTask.promise;
+        const page = await pdf.getPage(1);
+        const original = page.getViewport({ scale: 1 });
+        const scale = Math.min(THUMB_MAX.w / original.width, THUMB_MAX.h / original.height);
+        const viewport = page.getViewport({ scale });
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.ceil(viewport.width));
+        canvas.height = Math.max(1, Math.ceil(viewport.height));
+        const context = canvas.getContext("2d");
+        if (!context) return null;
+        await page.render({ canvas, canvasContext: context, viewport, background: "white" }).promise;
+        return await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, THUMB_MIME, THUMB_QUALITY));
+    } finally {
+        await loadingTask.destroy();
+    }
+}
+
 export async function generateThumbnailBlob(file: File): Promise<Blob | null> {
     try {
         const contentType = inferFileContentType(file);
+        if (isPdf(contentType)) return await makePdfThumbnail(file);
         if (isImage(contentType)) return await makeImageThumbnail(file);
         if (isVideo(contentType)) {
             if (!canBrowserDecodeVideoType(contentType)) return null;

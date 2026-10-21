@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
     UploadItem,
     uid,
-    isPdf,
     maxBytesForMime,
     generateThumbnailBlob,
     isSuspiciouslySmall,
@@ -193,17 +192,18 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
 
             let coverUrl: string | null = null;
             let thumbnailPath: string | null = null;
-            if (!isPdf(item.type)) {
-                const blob = await generateThumbnailBlob(item.file).catch(() => null);
-                if (blob) {
-                    thumbnailPath = `${workspaceId}/${assetId}.jpg`;
-                    const { error: thumbError } = await supabase.storage
-                        .from("thumbnails")
-                        .upload(thumbnailPath, blob, { contentType: blob.type || "image/jpeg", upsert: true });
-                    if (!thumbError) coverUrl = publicUrl("thumbnails", thumbnailPath);
-                }
+            const blob = await generateThumbnailBlob(item.file).catch(() => null);
+            if (canceledRef.current.has(item.id)) return;
+            if (blob) {
+                thumbnailPath = `${workspaceId}/${assetId}.jpg`;
+                const { error: thumbError } = await supabase.storage
+                    .from("thumbnails")
+                    .upload(thumbnailPath, blob, { contentType: blob.type || "image/jpeg", upsert: true });
+                if (!thumbError) coverUrl = publicUrl("thumbnails", thumbnailPath);
             }
 
+            const uploadedBy = (await supabase.auth.getUser()).data.user?.id ?? null;
+            if (canceledRef.current.has(item.id)) return;
             const { error: insertError } = await supabase.from("assets").insert({
                 id: assetId,
                 workspace_id: workspaceId,
@@ -215,7 +215,7 @@ export function useFileUpload({ workspaceId, projectId, folderId, onUploaded }: 
                 thumbnail_path: thumbnailPath,
                 mime_type: item.type,
                 size_bytes: item.size,
-                uploaded_by: (await supabase.auth.getUser()).data.user?.id ?? null,
+                uploaded_by: uploadedBy,
                 upload_batch_id: item.uploadBatchId ?? null,
                 upload_batch_total: item.uploadBatchTotal ?? null,
             });

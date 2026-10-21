@@ -996,7 +996,7 @@ export default function CampaignDetails({
   function onDragLeave(e: React.DragEvent) {
     e.preventDefault();
     e.stopPropagation();
-    dragCounter.current -= 1;
+    dragCounter.current = Math.max(0, dragCounter.current - 1);
     if (dragCounter.current === 0) {
       setIsDraggingFile(false);
     }
@@ -1197,6 +1197,8 @@ export default function CampaignDetails({
       if (event.dataTransfer.types.includes("Files")) {
         event.preventDefault();
         event.stopPropagation();
+        dragCounter.current = 0;
+        setIsDraggingFile(false);
         setFolderDropTargetId(null);
         setDraggingFolderId(null);
         if (!requestUploadAccess()) return;
@@ -3788,25 +3790,26 @@ export default function CampaignDetails({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="absolute inset-0 z-50 flex items-center justify-center bg-background/90 backdrop-blur-md rounded-lg pointer-events-none"
+              transition={{ duration: 0.14, ease: "easeOut" }}
+              className="absolute inset-x-6 bottom-6 top-28 z-50 flex items-center justify-center rounded-2xl border border-dashed border-primary/60 bg-background/72 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_24px_90px_rgba(0,0,0,0.35)] backdrop-blur-sm pointer-events-none"
             >
               <motion.div
-                initial={{ scale: 0.95, y: 15 }}
+                initial={{ scale: 0.95, y: 10 }}
                 animate={{ scale: 1, y: 0 }}
-                exit={{ scale: 0.95, y: 15 }}
-                transition={{ type: "spring", damping: 25, stiffness: 300 }}
-                className="flex flex-col items-center gap-6 p-12 rounded-[2rem] border-2 border-dashed border-primary/50 bg-primary/5 shadow-[0_0_80px_rgba(var(--primary),0.1)]"
+                exit={{ scale: 0.97, y: 6 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                className="flex max-w-[360px] flex-col items-center gap-5 rounded-2xl border border-primary/20 bg-card/78 px-8 py-7 text-center shadow-[0_0_70px_rgba(124,94,255,0.16)]"
               >
-                <div className="p-6 bg-primary/20 rounded-full animate-pulse">
-                  <Upload className="w-14 h-14 text-primary" strokeWidth={1.5} />
+                <div className="relative rounded-full bg-primary/12 p-5 text-primary">
+                  <span className="absolute inset-0 rounded-full bg-primary/18 blur-xl" />
+                  <Upload className="relative h-10 w-10" strokeWidth={1.6} />
                 </div>
                 <div className="text-center space-y-2">
-                  <h3 className="text-3xl font-bold tracking-tight text-foreground">
-                    Drop it like it's hot
+                  <h3 className="text-xl font-semibold tracking-tight text-foreground">
+                    Release to upload
                   </h3>
-                  <p className="text-muted-foreground text-lg max-w-[300px]">
-                    Drag and drop your files or folders here to upload them instantly.
+                  <p className="text-sm text-muted-foreground">
+                    Files will be added to this project.
                   </p>
                 </div>
               </motion.div>

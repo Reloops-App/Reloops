@@ -29,7 +29,7 @@ import { clearSharePassword, setSharePassword, withSharePassword } from "@/lib/s
 import { isDangerousFile, uid, uploadPartWithProgress, uploadSingleWithProgress, type UploadItem } from "@/components/file-upload-utils";
 import { UploadProgressCard } from "@/components/upload/UploadProgressCard";
 import { isRawImageFileName, isRawImageMime } from "@/lib/rawImageFormats";
-import { generateThumbnailBlob, prepareRawPreview, type PreparedRawPreview } from "@/components/file-upload-utils";
+import { generateThumbnailBlob, inferFileContentType, isPdf, prepareRawPreview, type PreparedRawPreview } from "@/components/file-upload-utils";
 import { RAW_POLL_INTERVAL_MS, RAW_POLL_MAX_ATTEMPTS } from "@/lib/rawPreviewPolling";
 import { assetsAwaitingServerCover } from "@/lib/assetCoverWait";
 import { keepRecentLocalRows, prependUploadedRow } from "@/lib/guestUploadRows";
@@ -149,10 +149,10 @@ async function saveGuestRawPreview(token: string, assetId: string, prepared: Pre
   }
 }
 
-// Reloops OSS has no thumbnail worker, so the guest's browser makes a video's
+// Reloops OSS has no thumbnail worker, so the guest's browser makes a video or PDF's
 // cover (the same generator member uploads use) and stores it through the
 // share-upload function. Best effort: without it the tile keeps its file icon.
-async function saveGuestVideoCover(token: string, assetId: string, file: File) {
+async function saveGuestFileCover(token: string, assetId: string, file: File) {
   try {
     const cover = await generateThumbnailBlob(file);
     if (!cover) return null;
@@ -160,12 +160,12 @@ async function saveGuestVideoCover(token: string, assetId: string, file: File) {
       body: withSharePassword(token, { action: "set-preview", token, assetId, cover_b64: await blobToBase64(cover) }),
     });
     if (error) {
-      console.warn("Guest video cover not saved", error);
+      console.warn("Guest file cover not saved", error);
       return null;
     }
     return (data as { cover_image_url?: string } | null)?.cover_image_url ?? null;
   } catch (error) {
-    console.warn("Guest video cover not saved", error);
+    console.warn("Guest file cover not saved", error);
     return null;
   }
 }
@@ -765,8 +765,10 @@ export default function ShareProject() {
               coverUrl = prepared.localUrl;
               void saveGuestRawPreview(token, result.id, prepared);
             }
-          } else if ((item.file.type || "").startsWith("video/")) {
-            coverUrl = await saveGuestVideoCover(token, result.id, item.file);
+          } else if (inferFileContentType(item.file).startsWith("video/") || isPdf(inferFileContentType(item.file))) {
+            setUploadItems((prev) => prev.map((i) => i.id === item.id ? { ...i, status: "uploading", phase: "thumbnail" } : i));
+            coverUrl = await saveGuestFileCover(token, result.id, item.file);
+            setUploadItems((prev) => prev.map((i) => i.id === item.id ? { ...i, status: "completed", phase: "done", coverUrl: coverUrl ?? undefined } : i));
           }
           const now = new Date().toISOString();
           // The tile appears the moment this file is done (not after the whole batch).

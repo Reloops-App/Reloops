@@ -25,7 +25,7 @@ test("fresh installs get the full project-sharing schema from the base migration
 
 test("existing installs upgrade without a reset: published migrations stay, and an idempotent migration adds project sharing", () => {
   // Every migration ever published must remain; removing one makes `supabase db push` fail,
-  // and scripts/dev-all.sh + docker-start.sh then run `db reset`, wiping the user's data.
+  // Startup now stops on a migration error rather than resetting the user's data.
   for (const published of ["20260527000000_init.sql", "20260706000000_public_api_role_grants.sql"]) {
     assert.ok(migrations.includes(published), `published migration ${published} must not be removed`);
   }
