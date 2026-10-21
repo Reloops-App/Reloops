@@ -5,14 +5,14 @@ node scripts/setup.mjs --quiet
 
 sh scripts/supabase-cli.sh start
 if ! sh scripts/supabase-cli.sh db push --local --yes; then
-  echo "Local migration push failed. Resetting the local database and applying migrations from scratch..."
-  sh scripts/supabase-cli.sh db reset --yes
+  echo "Migration failed. Existing data has been preserved. Fix the migration before restarting." >&2
+  exit 1
 fi
 sleep 3
 node scripts/sync-env.mjs
 node scripts/ensure-storage-buckets.mjs
 
-sh scripts/supabase-cli.sh functions serve share --env-file .env &
+sh scripts/supabase-cli.sh functions serve --env-file .env &
 FUNCTIONS_PID=$!
 
 pnpm --filter @reloops/asset-intelligence-worker dev &

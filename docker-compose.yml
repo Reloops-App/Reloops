@@ -1,14 +1,15 @@
 services:
   reloops:
+    image: reloops-oss:local
     build:
       context: .
       dockerfile: Dockerfile
     environment:
       FRONTEND_URL: ${FRONTEND_URL:-http://127.0.0.1:6173}
-      RELOOPS_HOST_PATH: ${RELOOPS_HOST_PATH:-${PWD}}
-      SUPABASE_API_PORT: ${SUPABASE_API_PORT:-56321}
+      RELOOPS_BACKEND_DIR: ${RELOOPS_HOST_PATH:-${PWD}}
       SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL:-http://127.0.0.1:56321}
-      SUPABASE_INTERNAL_URL: ${SUPABASE_INTERNAL_URL:-http://127.0.0.1:56321}
+      SUPABASE_INTERNAL_URL: ${RELOOPS_DOCKER_SUPABASE_URL:-http://host.docker.internal:56321}
+      SUPABASE_DB_URL: ${RELOOPS_DOCKER_DB_URL:-postgresql://postgres:postgres@host.docker.internal:56322/postgres?sslmode=disable}
       ASSET_AI_PROVIDER: ${ASSET_AI_PROVIDER:-mock}
       ASSET_AI_MODEL: ${ASSET_AI_MODEL:-gpt-4.1-mini}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -21,13 +22,15 @@ services:
       ASSET_AI_FFPROBE_TIMEOUT_MS: ${ASSET_AI_FFPROBE_TIMEOUT_MS:-10000}
       ASSET_AI_MAX_VIDEO_FRAMES: ${ASSET_AI_MAX_VIDEO_FRAMES:-3}
       ASSET_AI_VIDEO_FRAME_WIDTH: ${ASSET_AI_VIDEO_FRAME_WIDTH:-720}
-    network_mode: host
+    ports:
+      - "127.0.0.1:${RELOOPS_WEB_PORT:-6173}:6173"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - .:${RELOOPS_HOST_PATH:-${PWD}}
-      - supabase_temp:${RELOOPS_HOST_PATH:-${PWD}}/supabase/.temp
-    working_dir: ${RELOOPS_HOST_PATH:-${PWD}}
+      # The CLI's sibling containers need the same absolute path the host sees.
+      # Application code and Linux dependencies stay inside the built image.
+      - ./supabase:${RELOOPS_HOST_PATH:-${PWD}}/supabase
+    init: true
+    restart: unless-stopped
     stop_grace_period: 30s
-
-volumes:
-  supabase_temp:

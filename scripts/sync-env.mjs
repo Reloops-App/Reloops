@@ -61,6 +61,7 @@ function setting(values, key, fallback) {
 }
 
 function runSupabase(args) {
+  if (process.env.SUPABASE_WORKDIR) args = [...args, "--workdir", process.env.SUPABASE_WORKDIR];
   try {
     return execFileSync("supabase", args, {
       encoding: "utf8",
@@ -135,7 +136,7 @@ const rootChanged = upsertEnvFile(
     SERVICE_ROLE_KEY: values.SERVICE_ROLE_KEY,
     ASSET_SOURCE_BASE_URL: `${serverApiUrl}/storage/v1/object/public/assets`,
   },
-  (_key, currentValue) => isPlaceholder(currentValue),
+  (_key, currentValue) => process.env.RELOOPS_SYNC_ENV_FORCE === "1" || isPlaceholder(currentValue),
 );
 
 const rootEnv = {

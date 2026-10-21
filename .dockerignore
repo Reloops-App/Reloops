@@ -2,10 +2,26 @@
 .env
 .env.*
 !.env.example
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+.agents
+.codex
+.aws
 node_modules
 **/node_modules
 **/dist
 supabase/.temp
 supabase/.branches
+coverage
+**/coverage
+playwright-report
+test-results
+backend-test-logs
+docker-test-logs
 npm-debug.log
 pnpm-debug.log
+
+# Recorded demos are deliverables, not runtime app assets.
+artifacts

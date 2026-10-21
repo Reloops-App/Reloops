@@ -1,37 +1,46 @@
 #!/usr/bin/env sh
 set -eu
 
-SUPABASE_API_PORT="${SUPABASE_API_PORT:-56321}"
-SUPABASE_PUBLIC_URL="${SUPABASE_PUBLIC_URL:-http://127.0.0.1:${SUPABASE_API_PORT}}"
-SUPABASE_INTERNAL_URL="${SUPABASE_INTERNAL_URL:-http://host.docker.internal:${SUPABASE_API_PORT}}"
-FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:6173}"
-
-export SUPABASE_PUBLIC_URL
-export SUPABASE_INTERNAL_URL
-export FRONTEND_URL
-
-if [ ! -d node_modules ] || [ ! -d apps/web/node_modules ] || [ ! -d apps/asset-intelligence-worker/node_modules ]; then
-  pnpm install --frozen-lockfile
-fi
+: "${RELOOPS_BACKEND_DIR:?The Compose file must provide the backend checkout path}"
+export SUPABASE_WORKDIR="$RELOOPS_BACKEND_DIR"
+export SUPABASE_PUBLIC_URL="${SUPABASE_PUBLIC_URL:-http://127.0.0.1:56321}"
+export SUPABASE_INTERNAL_URL="${SUPABASE_INTERNAL_URL:-http://host.docker.internal:56321}"
+export FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:6173}"
+export RELOOPS_SYNC_ENV_FORCE=1
 
 node scripts/setup.mjs --quiet
+mkdir -p apps/web
 
-sh scripts/supabase-cli.sh start
-if ! sh scripts/supabase-cli.sh db push --local --yes; then
-  echo "Local migration push failed. Resetting the local database and applying migrations from scratch..."
-  sh scripts/supabase-cli.sh db reset --yes
+node scripts/docker-local-cli.mjs start --workdir "$SUPABASE_WORKDIR" >/dev/null
+if ! supabase db push --db-url "${SUPABASE_DB_URL:-postgresql://postgres:postgres@host.docker.internal:56322/postgres?sslmode=disable}" --yes --workdir "$SUPABASE_WORKDIR"; then
+  echo "Migration failed. Existing data has been preserved. Fix the migration before restarting." >&2
+  exit 1
 fi
-
-sleep 3
 node scripts/sync-env.mjs
 node scripts/ensure-storage-buckets.mjs
+node scripts/configure-docker-web.mjs
 
-pnpm --filter @reloops/asset-intelligence-worker dev &
+supabase functions serve --workdir "$SUPABASE_WORKDIR" --env-file /app/.env &
+FUNCTIONS_PID=$!
+node --env-file=apps/asset-intelligence-worker/.env.local apps/asset-intelligence-worker/dist/index.js &
 WORKER_PID=$!
+WEB_PID=""
 
 cleanup() {
-  kill "$WORKER_PID" >/dev/null 2>&1 || true
+  for pid in "$FUNCTIONS_PID" "$WORKER_PID" "$WEB_PID"; do
+    if [ -n "$pid" ]; then kill "$pid" >/dev/null 2>&1 || true; fi
+  done
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 0' INT TERM
 
-pnpm --filter @reloops/web dev --host 0.0.0.0 --port 6173
+node scripts/wait-functions.mjs
+node scripts/serve-web.mjs &
+WEB_PID=$!
+echo "Reloops is ready at $FRONTEND_URL"
+
+# Exit if a child fails so Compose can restart the whole app consistently.
+while kill -0 "$FUNCTIONS_PID" && kill -0 "$WORKER_PID" && kill -0 "$WEB_PID"; do
+  sleep 2
+done
+exit 1
