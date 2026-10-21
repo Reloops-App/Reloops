@@ -149,6 +149,8 @@ Find assets by name, folder, format, status, people, tags, metadata, generated d
 
 Reloops can generate smart descriptions, tags, and searchable metadata for creative assets. Agent-ready API endpoints let internal tools and AI agents find, upload, organize, review, comment on, and share assets through scoped API keys.
 
+Local OSS starts with `ASSET_AI_PROVIDER=mock`. In this mode, smart metadata is generated from filenames, file types, existing tags, dimensions, and project association. It does not inspect image or video contents or call an AI service. Enable the optional OpenAI provider for content analysis; see [Local Setup](docs/SETUP.md#optional-openai-metadata).
+
 ### AI Metadata
 
 <p align="center">
@@ -175,7 +177,7 @@ Create developer keys for OpenClaw, OpenAI, Claude, Gemini, Zapier, n8n, Replica
 
 - 🗂️ Organize every campaign asset in a self-hosted creative workspace.
 - 🔎 Search across folders, tags, metadata, statuses, people, dates, formats, and version stacks.
-- 🤖 Use AI to generate smart descriptions and tags for images, videos, screenshots, and other creative assets.
+- 🤖 Enable the optional OpenAI provider to generate smart descriptions and tags from asset content; local OSS defaults to mock metadata.
 - ✅ Move assets through project workflows from needs review to approved.
 - 💬 Manage versions, comments, assignments, reviewers, approvals, share links, and guest feedback.
 - 🧠 Assign review work to humans or agents and keep the full decision thread on the asset.
@@ -207,7 +209,7 @@ Digital asset management, or DAM, means a central place to store, organize, sear
 - 🗂️ Agents can list and create workspaces and projects.
 - 🔌 Agents can fetch assets, patch asset status, create comments, and manage share links.
 - 🧩 OpenClaw can use the included [`openclaw-reloops-api`](skills/openclaw-reloops-api/SKILL.md) skill; see the [OpenClaw API Skill guide](docs/openclaw-reloops-api.md).
-- 🤖 The local asset intelligence worker uses AI to generate smart descriptions and tags for assets.
+- 🤖 The local asset intelligence worker generates mock smart metadata by default, with optional OpenAI analysis for images and sampled video frames.
 - 🔁 Generated media can flow back into the same library, collection, review, and approval loop.
 
 ## 🧱 Tech Stack
@@ -224,11 +226,12 @@ Digital asset management, or DAM, means a central place to store, organize, sear
 Start the full local OSS stack with Docker:
 
 ```bash
-cp .env.example .env
-docker compose up --build
+docker compose up -d --build --wait --wait-timeout 600
 ```
 
 Then open `http://127.0.0.1:6173`. For manual pnpm setup and environment details, see the [Local Setup Guide](docs/SETUP.md).
+
+For contributors, `pnpm test` runs unit coverage, contracts, typechecks, and the production build. See [Testing](docs/TESTING.md) for browser and backend integration checks.
 
 ## 🏠 Self-hosted OSS
 
@@ -237,7 +240,7 @@ This repository is the open-source, self-hosted version of Reloops.
 * ✅ Included in OSS:
   - Supabase Auth, Postgres, Storage, and Edge Functions
   - Workspaces, teams, projects, folders, assets, versions, comments, reviews, assignments, and notifications
-  - Creative asset search, collections, metadata filtering, AI-generated smart descriptions and tags, share links, and guest comments
+  - Creative asset search, collections, metadata filtering, smart descriptions and tags (mock by default, optional OpenAI analysis), share links, and guest comments
   - API-key agent endpoints for controlled automation inside workspaces
   - Local asset intelligence worker with DB queue polling
   - Local-first setup for running the full product on your machine or own infrastructure
