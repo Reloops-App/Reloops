@@ -1,262 +1,171 @@
 <p align="center">
-  <picture>
-    <img alt="Reloops Logo" src="docs/assets/reloops-logo.png" width="280"/>
-  </picture>
+  <img alt="Reloops. All your files. All their feedback. Finally together. The open-source workspace to store, organize and review every file." src="docs/assets/readme/hero.png" />
 </p>
 
 <p align="center">
-<a href="https://opensource.org/license/agpl-v3">
-  <img src="https://img.shields.io/badge/License-AGPL%203.0-blue.svg" alt="License">
-</a>
-<a href="https://github.com/Reloops-App/reloops/graphs/traffic">
-  <img src="https://img.shields.io/badge/dynamic/json?color=brightgreen&label=Total%20clones&query=%24.totalClones&url=https%3A%2F%2Fraw.githubusercontent.com%2FReloops-App%2Freloops%2Fmain%2Fclone-stats.json&logo=github" alt="Tracked total GitHub clones">
-</a>
-</p>
-
-<h3 align="center"><strong><a href="docs/SETUP.md">NEW: run the open-source Reloops creative workspace locally in minutes</a></strong></h3>
-<div align="center">
-  <strong>
-  <h2>Organize creative files, collect feedback, approve versions, and share client-ready collections.</h2><br />
-  Reloops is an open-source creative workspace with AI metadata, semantic search, and agent-ready APIs built in.<br /><br />
-  </strong>
-  Use it to review images, videos, PDFs, screenshots, captured web pages, campaign assets,<br />social creatives, client deliverables, and generated media in one self-hosted workspace.
-</div>
-
-<div class="flex" align="center">
-  <br />
-  <strong>Creative Review</strong>
-  &nbsp;·&nbsp;
-  <strong>Versions</strong>
-  &nbsp;·&nbsp;
-  <strong>Approvals</strong>
-  &nbsp;·&nbsp;
-  <strong>Collections</strong>
-  &nbsp;·&nbsp;
-  <strong>Search</strong>
-  &nbsp;·&nbsp;
-  <strong>Share Links</strong>
-  &nbsp;·&nbsp;
-  <strong>AI + Agents</strong>
-</div>
-
-<p align="center">
-  <br />
-  <a href="docs/SETUP.md" rel="dofollow"><strong>Start locally »</strong></a>
-  &nbsp;·&nbsp;
-  <a href="#intro" rel="dofollow"><strong>See what Reloops does »</strong></a>
-  <br />
-  <br />
-  <a href="https://discord.gg/sas5PUPqN" rel="dofollow">
-    <img src="https://img.shields.io/badge/Join%20the%20Reloops%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join the Reloops Discord">
-  </a>
-  <br />
+  <a href="https://opensource.org/license/agpl-v3"><img src="https://img.shields.io/badge/License-AGPL%203.0-6854E5.svg" alt="License"></a>
+  <a href="https://github.com/Reloops-App/reloops/stargazers"><img src="https://img.shields.io/github/stars/Reloops-App/reloops?style=flat&logo=github&color=6854E5" alt="GitHub stars"></a>
+  <a href="https://github.com/Reloops-App/reloops/graphs/traffic"><img src="https://img.shields.io/badge/dynamic/json?color=2EC4D6&label=Total%20clones&query=%24.totalClones&url=https%3A%2F%2Fraw.githubusercontent.com%2FReloops-App%2Freloops%2Fmain%2Fclone-stats.json&logo=github" alt="Tracked total GitHub clones"></a>
+  <a href="https://discord.gg/sas5PUPqN"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Join the Reloops Discord"></a>
 </p>
 
 <p align="center">
-  <a href="docs/SETUP.md">Quick Start</a>
+  <a href="#-quick-start"><strong>Quick start</strong></a>
   ·
-  <a href="https://discord.gg/sas5PUPqN">Discord</a>
+  <a href="#-see-reloops-in-action"><strong>See it in action</strong></a>
   ·
-  <a href="docs/openclaw-reloops-api.md">OpenClaw API Skill</a>
+  <a href="#-self-hosted-or-hosted"><strong>Self-host vs hosted</strong></a>
   ·
-  <a href="#what-reloops-helps-you-do">Features</a>
+  <a href="https://discord.gg/sas5PUPqN"><strong>Discord</strong></a>
   ·
-  <a href="#alternative-to">Alternative To</a>
-  ·
-  <a href="#tech-stack">Tech Stack</a><br />
+  <a href="https://reloops.app"><strong>reloops.app</strong></a>
 </p>
-<p align="center">
-  <a href="#ai-metadata-and-agent-ready-apis">AI + Agents</a>
-  ·
-  <a href="#self-hosted-oss">Self-hosted OSS</a>
-  ·
-  <a href="#license">License</a>
-</p>
-
-<br /><br />
-
-## Review and Approve Creative Work in One Place
-
-<p align="center">
-  <img alt="Reloops project workflow board for creative review and approvals" src="docs/assets/reloops-kanban-workflow.png" />
-</p>
-
-## What Reloops Helps You Do
-
-Reloops replaces the messy mix of drive links, chat threads, email feedback, spreadsheets, screenshots, and disconnected approval tools with one workspace for creative work.
-
-- Organize creative files by workspace, project, folder, collection, and version.
-- Review images, videos, PDFs, screenshots, captured web pages, campaign assets, social creatives, and client deliverables.
-- Collect timestamped, pinned, and contextual feedback.
-- Approve versions or request changes.
-- Share client-ready links and collections.
-- Search across assets with metadata, tags, smart descriptions, OCR-ready text, status, people, dates, formats, and version stacks.
-- Let AI agents safely work with your media library through scoped API-key endpoints.
-
-## Review Everything in One Workspace
-
-Creative review is not one file type. Reloops gives your team the same comment, version, approval, sharing, and activity workflow across the assets that make up real campaigns.
-
-### Video, Social, and Web Review
-
-Review videos and social cuts with timestamped comments, safe-zone previews, status controls, reviewer threads, and exportable markers.
-
-<p align="center">
-  <img alt="Reloops video review workspace with timestamped feedback" src="docs/assets/reloops-workspace.png" />
-</p>
-
-### Version Review and Approvals
-
-Compare old and new versions side by side, keep comments attached to the right cut, request changes, and upload the next pass from the same review flow.
-
-<p align="center">
-  <img alt="Reloops side-by-side version comparison for creative approvals" src="docs/assets/reloops-compare-versions.png" />
-</p>
-
-### Guest Feedback Without Onboarding
-
-External reviewers can identify themselves, view shared assets, leave comments, and participate in review without joining the whole workspace.
-
-<p align="center">
-  <img alt="Reloops guest reviewer feedback flow" src="docs/assets/reloops-guest-review.png" />
-</p>
-
-## Share Client-Ready Collections
-
-Turn selected assets into polished collections with search, download access, creator context, and a focused browsing experience for clients or stakeholders.
-
-<p align="center">
-  <img alt="Reloops published client-ready collection" src="docs/assets/reloops-published-collection.png" />
-</p>
-
-### Share Work Without Losing Control
-
-Create locked share links with expiration, download permissions, comment permissions, and collection-level access rules.
-
-<p align="center">
-  <img alt="Reloops share link controls" src="docs/assets/reloops-share-link.png" />
-</p>
-
-## Search Across Your Creative Workspace
-
-Find assets by name, folder, format, status, people, tags, metadata, generated descriptions, dates, and version stacks.
-
-<p align="center">
-  <img alt="Reloops creative asset search across metadata and projects" src="docs/assets/reloops-dam-search.png" />
-</p>
-
-## AI Metadata and Agent-Ready APIs
-
-Reloops can generate smart descriptions, tags, and searchable metadata for creative assets. Agent-ready API endpoints let internal tools and AI agents find, upload, organize, review, comment on, and share assets through scoped API keys.
-
-Local OSS starts with `ASSET_AI_PROVIDER=mock`. In this mode, smart metadata is generated from filenames, file types, existing tags, dimensions, and project association. It does not inspect image or video contents or call an AI service. Enable the optional OpenAI provider for content analysis; see [Local Setup](docs/SETUP.md#optional-openai-metadata).
-
-### AI Metadata
-
-<p align="center">
-  <img alt="Reloops AI-generated smart metadata and tags" src="docs/assets/reloops-smart-metadata.png" />
-</p>
-
-### Agents in the Review Thread
-
-Assign review work to humans or agents, keep the full decision thread on the asset, and let agents reply beside the team.
-
-<p align="center">
-  <img alt="Reloops agent participating in a creative review thread" src="docs/assets/reloops-agent-review-thread.png" />
-</p>
-
-### Scoped API Keys for Automation
-
-Create developer keys for OpenClaw, OpenAI, Claude, Gemini, Zapier, n8n, Replicate, Runway, and custom agents so automation can operate inside the asset system.
-
-<p align="center">
-  <img alt="Reloops agent and developer key setup" src="docs/assets/reloops-agent-keys.png" />
-</p>
-
-## Intro
-
-- 🗂️ Organize every campaign asset in a self-hosted creative workspace.
-- 🔎 Search across folders, tags, metadata, statuses, people, dates, formats, and version stacks.
-- 🤖 Enable the optional OpenAI provider to generate smart descriptions and tags from asset content; local OSS defaults to mock metadata.
-- ✅ Move assets through project workflows from needs review to approved.
-- 💬 Manage versions, comments, assignments, reviewers, approvals, share links, and guest feedback.
-- 🧠 Assign review work to humans or agents and keep the full decision thread on the asset.
-- 🌌 Build dynamic collections for campaigns, clients, teams, launches, and reusable asset groups.
-- 👥 Invite team members to collaborate, comment, review, and approve assets.
-- 🔌 Let AI agents and workflow tools create projects, fetch assets, comment, enrich metadata, and manage shares.
-- ⚡ Perfect for automation with platforms like n8n, Make, Zapier, OpenClaw, and custom agents.
-
-## 🔁 Alternative To
-
-Reloops is a creative workspace for teams that need more than storage. It combines asset organization, review, approvals, client sharing, AI metadata, and agent-ready APIs in one self-hosted product.
-
-| If you are using... | Reloops helps you replace or extend it with... |
-|---------------------|-----------------------------------------------|
-| Brandfolder, Bynder, Canto | Self-hosted creative asset management, collections, metadata, search, and asset history |
-| Google Drive, Dropbox, Notion, Airtable | Purpose-built asset workspaces instead of folders, rows, and scattered comments |
-| Frame.io, Dropbox Replay, Wipster | Review, comments, version stacks, approvals, and share links alongside the asset library |
-| Ziflow, Filestage, ReviewStudio | Structured creative feedback without a heavyweight enterprise approval suite |
-| Zapier, n8n, Make, custom agents | Controlled API actors that can participate directly in asset operations |
-| Internal DAM tools | Auth, storage, asset views, review UI, share links, API keys, and local workers already wired together |
-
-Digital asset management, or DAM, means a central place to store, organize, search, review, and share creative files. Reloops includes that foundation, but the README leads with the work people actually do: feedback, approvals, versions, sharing, search, and automation.
-
-## 🤖 Agent-Ready Creative Workspace
-
-- 🔑 API-key actors can operate inside organization workspaces.
-- 👥 Human teammates, reviewers, and API-key agents can all be assigned asset work.
-- 💬 Agents can receive review assignments and reply in the same comment thread as the team.
-- 🗂️ Agents can list and create workspaces and projects.
-- 🔌 Agents can fetch assets, patch asset status, create comments, and manage share links.
-- 🧩 OpenClaw can use the included [`openclaw-reloops-api`](skills/openclaw-reloops-api/SKILL.md) skill; see the [OpenClaw API Skill guide](docs/openclaw-reloops-api.md).
-- 🤖 The local asset intelligence worker generates mock smart metadata by default, with optional OpenAI analysis for images and sampled video frames.
-- 🔁 Generated media can flow back into the same library, collection, review, and approval loop.
-
-## 🧱 Tech Stack
-
-- 📦 Pnpm workspaces
-- ⚛️ Vite + React + TypeScript
-- 🟢 Supabase Auth, Postgres, Storage, RLS, and Edge Functions
-- 🤖 Node asset intelligence worker
-- 🔑 API-key agent layer
-- 🐳 Docker for local Supabase services
 
 ## 🚀 Quick Start
 
-Start the full local OSS stack with Docker:
+<p align="center">
+  <img alt="Running in three steps: clone the repo, start the stack with Docker Compose, open http://127.0.0.1:6173" src="docs/assets/readme/quickstart.png" />
+</p>
 
 ```bash
+git clone https://github.com/Reloops-App/reloops.git
+cd reloops
 docker compose up -d --build --wait --wait-timeout 600
 ```
 
-Then open `http://127.0.0.1:6173`. For manual pnpm setup and environment details, see the [Local Setup Guide](docs/SETUP.md).
+Then open **http://127.0.0.1:6173**. For manual pnpm setup, environment variables, and ports, see the [Local Setup Guide](docs/SETUP.md).
 
-For contributors, `pnpm test` runs unit coverage, contracts, typechecks, and the production build. See [Testing](docs/TESTING.md) for browser and backend integration checks.
+## 🗂️ Every File Type
 
-## 🏠 Self-hosted OSS
+<p align="center">
+  <img alt="Every file type stored, organized and reviewed in one place: video, images, PDFs, live websites, HTML5 ads, audio and social posts" src="docs/assets/readme/filetypes.png" />
+</p>
 
-This repository is the open-source, self-hosted version of Reloops.
+<p align="center">
+  <img alt="Organized by client, the way you already work: workspaces, projects and folders like a file manager, with every version and sign-off kept on the file" src="docs/assets/readme/organize.png" />
+</p>
 
-* ✅ Included in OSS:
+## 🎬 See Reloops in Action
+
+### Click anywhere on a design to leave a note
+
+<p align="center">
+  <img alt="Reloops image review: clicking on a backpack photo to pin a comment that stays on that exact spot" src="docs/assets/readme/app-review.gif" />
+</p>
+
+### Comments land on the exact frame
+
+<p align="center">
+  <img alt="Reloops video review: a timestamped comment added at 00:00:03:17 and shown over the video" src="docs/assets/readme/app-video.gif" />
+</p>
+
+<table>
+  <tr>
+    <td width="50%"><img alt="Every version kept: the versions menu with v1 and v2, compare, then approve" src="docs/assets/readme/shot-versions.png" /></td>
+    <td width="50%"><img alt="Share approved work in one polished link: a shared collection page" src="docs/assets/readme/shot-collection.png" /></td>
+  </tr>
+</table>
+
+## 🔎 Find Anything
+
+<p align="center">
+  <img alt="Every upload tags itself: AI description and tags for an image of tents above an alpine lake" src="docs/assets/readme/metadata.png" />
+</p>
+
+<p align="center">
+  <img alt="Just describe the file you need: a search for 'approved homepage, blue button' finds Homepage_v4" src="docs/assets/readme/search.png" />
+</p>
+
+> [!NOTE]
+> Local installs start with `ASSET_AI_PROVIDER=mock`, which builds metadata from file names, types, existing tags, dimensions, and project. It does not look inside your files or call an AI service. Enable the optional OpenAI provider to analyze images and sampled video frames; see [Local Setup](docs/SETUP.md#optional-openai-metadata).
+
+## 🤖 Built for Teams and Agents
+
+<p align="center">
+  <img alt="Hand off work to your team, or to AI: assign a file to Maya, Sam or an AI agent connected with an API key, plus the agent API endpoints" src="docs/assets/readme/agents.png" />
+</p>
+
+- 🔑 Create scoped API keys for OpenClaw, OpenAI, Claude, Gemini, Zapier, n8n, Make, and your own agents.
+- 🗂️ Agents can list and create workspaces and projects, fetch and upload assets, patch status, comment, and manage share links.
+- 🧩 OpenClaw can use the included [`openclaw-reloops-api`](skills/openclaw-reloops-api/SKILL.md) skill; see the [OpenClaw API Skill guide](docs/openclaw-reloops-api.md).
+
+## 🏠 Self-hosted or Hosted
+
+<p align="center">
+  <img alt="Cancel the tool stack, keep the work: separate storage, video review, PDF proofing and website feedback tools cost $175–300+ a month; Reloops self-hosted is $0 and open source" src="docs/assets/readme/stack.png" />
+</p>
+
+This repository is the open-source, self-hosted version of Reloops. Prefer not to run servers? Use the hosted version at **[reloops.app](https://reloops.app)**.
+
+| | Self-hosted (this repo) | Hosted ([reloops.app](https://reloops.app)) |
+|---|:---:|:---:|
+| Workspaces, projects, folders, versions, comments, approvals | ✅ | ✅ |
+| Video, image, PDF, website, audio, and HTML5 review | ✅ | ✅ |
+| Share links, collections, and guest comments | ✅ | ✅ |
+| Search and smart metadata | ✅ mock, or your OpenAI key | ✅ |
+| API keys for agents | ✅ | ✅ |
+| Managed cloud storage and workers | Bring your own | ✅ |
+| Website screenshot capture | With your `SCREENSHOTONE_ACCESS_KEY` | ✅ |
+| Email delivery | Wire up your own | ✅ |
+
+<details>
+<summary><strong>What exactly is included in the OSS package</strong></summary>
+
+<br />
+
+* ✅ Included:
   - Supabase Auth, Postgres, Storage, and Edge Functions
   - Workspaces, teams, projects, folders, assets, versions, comments, reviews, assignments, and notifications
-  - Creative asset search, collections, metadata filtering, smart descriptions and tags (mock by default, optional OpenAI analysis), share links, and guest comments
+  - Creative asset search, collections, metadata filtering, smart descriptions and tags (mock by default, optional OpenAI analysis), share links, project sharing, and guest comments
   - API-key agent endpoints for controlled automation inside workspaces
   - Local asset intelligence worker with DB queue polling
   - Local-first setup for running the full product on your machine or own infrastructure
 
-* ⚠️ Not included in this OSS package:
+* ⚠️ Not included:
   - Hosted billing and managed subscription infrastructure
   - Hosted cloud storage integrations beyond local Supabase Storage defaults
   - Hosted workers, QStash, Cloudflare Workers, and commercial deployment infrastructure
   - Managed analytics and hosted screenshot-capture credits
   - Managed email delivery; local OSS includes notification data/preferences and local invite handling, but production email delivery is expected to be wired by the self-hosting team
 
-* 🗄️ Storage and capture model:
+* 🗄️ Storage and capture:
   - Uploads use Supabase Storage.
   - Website review works with uploaded screenshots, or captured screenshots when `SCREENSHOTONE_ACCESS_KEY` is configured.
-  - Asset intelligence runs locally through the worker to generate smart descriptions and tags unless you connect your own production worker setup.
+  - Asset intelligence runs locally through the worker unless you connect your own production worker setup.
+
+</details>
+
+<details>
+<summary><strong>Alternative to Frame.io, Brandfolder, Google Drive, Filestage, and more</strong></summary>
+
+<br />
+
+| If you are using... | Reloops helps you replace or extend it with... |
+|---------------------|-----------------------------------------------|
+| Google Drive, Dropbox, Notion, Airtable | Purpose-built file workspaces instead of folders, rows, and scattered comments |
+| Brandfolder, Bynder, Canto | Self-hosted asset management, collections, metadata, search, and asset history |
+| Frame.io, Dropbox Replay, Wipster | Review, comments, version stacks, approvals, and share links alongside the file library |
+| Ziflow, Filestage, ReviewStudio | Structured feedback without a heavyweight enterprise approval suite |
+| Zapier, n8n, Make, custom agents | Controlled API actors that can participate directly in asset operations |
+| Internal DAM tools | Auth, storage, asset views, review UI, share links, API keys, and local workers already wired together |
+
+</details>
+
+## 🧱 Tech Stack
+
+- 📦 pnpm workspaces
+- ⚛️ Vite + React + TypeScript
+- 🟢 Supabase Auth, Postgres, Storage, RLS, and Edge Functions
+- 🤖 Node asset intelligence worker
+- 🔑 API-key agent layer
+- 🐳 Docker for the full local stack
+
+## 🤝 Contributing
+
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md); `pnpm test` runs unit coverage, contracts, typechecks, and the production build, and [Testing](docs/TESTING.md) covers browser and backend integration checks. Report security issues as described in [SECURITY.md](SECURITY.md).
+
+Questions or ideas? Join the [Discord](https://discord.gg/sas5PUPqN).
 
 ## 📄 License
 
-This repository's source code is available under the [AGPL-3.0 license](LICENSE)
+This repository's source code is available under the [AGPL-3.0 license](LICENSE).
