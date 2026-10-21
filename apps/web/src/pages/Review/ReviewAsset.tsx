@@ -9,6 +9,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import VideoPlayerWithAnnotations, { type Annotation } from "@/components/review/video";
 import ImageAnnotatorWithAnnotations from "@/components/review/image";
 import WebScreenshotReview from "@/components/review/WebScreenshotReview";
+import AudioReview from "@/components/review/audio";
 import PdfAnnotatorWithAnnotations from "@/components/review/pdf";
 import UnsupportedAssetPreview from "@/components/review/UnsupportedAssetPreview";
 import { normalizeAnnotation } from "@/components/review/annotator-utils";
@@ -923,6 +924,7 @@ export default function ReviewAsset() {
 
   const isVideo = Boolean(asset?.mime_type && asset.mime_type.startsWith("video/"));
   const isPdf = asset?.mime_type === "application/pdf";
+  const isAudio = Boolean(asset?.mime_type?.startsWith("audio/"));
   const reviewImageUrl = useResolvedAssetFileUrl((() => {
     const rawPath = asset?.storage_path || asset?.url || "";
     if (!rawPath) return "";
@@ -1815,6 +1817,20 @@ export default function ReviewAsset() {
                 title={assetDisplayName}
                 videoUrl={reviewImageUrl}
                 poster={asset?.cover_image_url}
+                annotations={playerAnnotations}
+                onAddAnnotation={handleAddAnnotation}
+                projectId={projectId}
+                organizationId={organizationId}
+                workspaceId={workspaceId}
+                assetId={assetId}
+                asset={asset}
+                onAssetMetadataSave={handleAssetMetadataSave}
+                profiles={profiles}
+              />
+            ) : isAudio ? (
+              <AudioReview
+                title={assetDisplayName}
+                audioUrl={reviewImageUrl}
                 annotations={playerAnnotations}
                 onAddAnnotation={handleAddAnnotation}
                 projectId={projectId}
