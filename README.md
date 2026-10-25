@@ -168,4 +168,5 @@ Questions or ideas? Join the [Discord](https://discord.gg/sas5PUPqN).
 
 ## 📄 License
 
+
 This repository's source code is available under the [AGPL-3.0 license](LICENSE).
