@@ -1,6 +1,10 @@
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// The code view's imports (lib/utils → api) create a Supabase client at module
+// load, which throws without VITE_SUPABASE_URL (CI has no .env). The code view
+// never talks to Supabase, so a stub is enough.
+vi.mock("@/lib/supabaseClient", () => ({ supabase: {}, getSessionToken: vi.fn(), getLoggedInUserProfile: vi.fn() }));
 import { isHtml5BannerAsset } from "../../src/lib/html5Banner";
 import { fetchTextResource } from "../../src/lib/fetchTextResource";
 import Html5BannerCodeView from "../../src/components/review/Html5BannerCodeView";
