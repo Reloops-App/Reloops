@@ -6,6 +6,8 @@ import VideoPlayerWithAnnotations, { type Annotation } from "@/components/review
 import ImageAnnotatorWithAnnotations from "@/components/review/image";
 import WebScreenshotReview from "@/components/review/WebScreenshotReview";
 import PdfAnnotatorWithAnnotations from "@/components/review/pdf";
+import Html5BannerAnnotatorWithAnnotations from "@/components/review/html5Banner";
+import { isHtml5BannerAsset } from "@/lib/html5Banner";
 import UnsupportedAssetPreview from "@/components/review/UnsupportedAssetPreview";
 import { normalizeAnnotation } from "@/components/review/annotator-utils";
 import { isLikelyWebsiteScreenshot, type ImageDimensions } from "@/components/review/website-review-utils";
@@ -89,6 +91,7 @@ export default function ShareAsset() {
     const asset = share?.assets ?? null;
     const isVideo = Boolean(asset?.mime_type && asset.mime_type.startsWith("video/"));
     const isPdf = asset?.mime_type === "application/pdf";
+    const isHtml5Banner = isHtml5BannerAsset({ mime_type: asset?.mime_type, title: asset?.title, storage_path: asset?.storage_path });
     const reviewImageUrl = asset?.file_url ?? asset?.signed_url ?? (asset?.storage_path ? `${import.meta.env.VITE_ASSET_PUBLIC_BASE_URL}${asset.storage_path}` : "");
     const isUnsupportedDesignPreview = isDesignPreviewUnavailableAsset({
         mime_type: asset?.mime_type,
@@ -435,6 +438,16 @@ export default function ShareAsset() {
                             onAddAnnotation={handleAddAnnotation}
                             assetId={asset?.id}
                             asset={asset as any}
+                        />
+                    ) : isHtml5Banner ? (
+                        <Html5BannerAnnotatorWithAnnotations
+                            title={asset?.title}
+                            htmlUrl={reviewImageUrl}
+                            annotations={playerAnnotations}
+                            onAddAnnotation={handleAddAnnotation}
+                            assetId={asset?.id}
+                            asset={asset as any}
+                            commentMutationContext={token ? { share_token: token } : undefined}
                         />
                     ) : isUnsupportedDesignPreview ? (
                         <UnsupportedAssetPreview

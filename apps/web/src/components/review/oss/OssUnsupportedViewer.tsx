@@ -1,7 +1,7 @@
 import UnsupportedAssetPreview from "@/components/review/UnsupportedAssetPreview";
 
-// Reloops OSS doesn't ship some of cloud's specialised viewers (HTML5
-// banners, live URL / snippet review, 360° panoramas). Those file types fall back
+// Reloops OSS doesn't ship some of cloud's specialised viewers (live URL /
+// snippet review, 360° panoramas). Those file types fall back
 // to the unsupported-preview card, which still carries comments and download.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ViewerProps = Record<string, any>;

@@ -9,6 +9,8 @@ import { ShareAuthDialog } from "@/components/review/ShareAuthDialog";
 import { normalizeAnnotation } from "@/components/review/annotator-utils";
 import ImageAnnotatorWithAnnotations from "@/components/review/image";
 import PdfAnnotatorWithAnnotations from "@/components/review/pdf";
+import Html5BannerAnnotatorWithAnnotations from "@/components/review/html5Banner";
+import { isHtml5BannerAsset } from "@/lib/html5Banner";
 import VideoPlayerWithAnnotations, { type Annotation } from "@/components/review/video";
 import WebScreenshotReview from "@/components/review/WebScreenshotReview";
 import { isLikelyWebsiteScreenshot, type ImageDimensions } from "@/components/review/website-review-utils";
@@ -90,6 +92,7 @@ export default function ShareCollectionAsset() {
   const isVideo = Boolean(mimeType && mimeType.startsWith("video/"));
   const isPdf = mimeType === "application/pdf";
   const storagePath = asset?.storage_path ?? null;
+  const isHtml5Banner = isHtml5BannerAsset({ mime_type: mimeType, name: asset?.name, title: asset?.title, storage_path: storagePath });
   const reviewAssetUrl = asset?.file_url ?? asset?.signed_url ?? (storagePath ? `${import.meta.env.VITE_ASSET_PUBLIC_BASE_URL}${storagePath}` : "");
 
   useEffect(() => {
@@ -403,6 +406,16 @@ export default function ShareCollectionAsset() {
               onAddAnnotation={handleAddAnnotation}
               assetId={asset.id}
               asset={asset as any}
+            />
+          ) : isHtml5Banner ? (
+            <Html5BannerAnnotatorWithAnnotations
+              title={asset.title || asset.name}
+              htmlUrl={reviewAssetUrl}
+              annotations={playerAnnotations}
+              onAddAnnotation={handleAddAnnotation}
+              assetId={asset.id}
+              asset={asset as any}
+              commentMutationContext={token ? { share_token: token } : undefined}
             />
           ) : pendingImageReviewerType ? (
             <div className="aspect-video w-full overflow-hidden rounded-lg border bg-muted/30" />

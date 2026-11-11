@@ -11,7 +11,9 @@ import ImageAnnotatorWithAnnotations from "@/components/review/image";
 import WebScreenshotReview from "@/components/review/WebScreenshotReview";
 import AudioReview from "@/components/review/audio";
 import PdfAnnotatorWithAnnotations from "@/components/review/pdf";
+import Html5BannerAnnotatorWithAnnotations from "@/components/review/html5Banner";
 import UnsupportedAssetPreview from "@/components/review/UnsupportedAssetPreview";
+import { isHtml5BannerAsset } from "@/lib/html5Banner";
 import { normalizeAnnotation } from "@/components/review/annotator-utils";
 import { isLikelyWebsiteScreenshot, type ImageDimensions } from "@/components/review/website-review-utils";
 import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
@@ -925,6 +927,7 @@ export default function ReviewAsset() {
   const isVideo = Boolean(asset?.mime_type && asset.mime_type.startsWith("video/"));
   const isPdf = asset?.mime_type === "application/pdf";
   const isAudio = Boolean(asset?.mime_type?.startsWith("audio/"));
+  const isHtml5Banner = isHtml5BannerAsset({ mime_type: asset?.mime_type, name: asset?.name, storage_path: asset?.storage_path });
   const reviewImageUrl = useResolvedAssetFileUrl((() => {
     const rawPath = asset?.storage_path || asset?.url || "";
     if (!rawPath) return "";
@@ -1845,6 +1848,20 @@ export default function ReviewAsset() {
               <PdfAnnotatorWithAnnotations
                 title={assetDisplayName}
                 pdfUrl={reviewImageUrl}
+                annotations={playerAnnotations}
+                onAddAnnotation={handleAddAnnotation}
+                projectId={projectId}
+                organizationId={organizationId}
+                workspaceId={workspaceId}
+                assetId={assetId}
+                asset={asset}
+                onAssetMetadataSave={handleAssetMetadataSave}
+                profiles={profiles}
+              />
+            ) : isHtml5Banner ? (
+              <Html5BannerAnnotatorWithAnnotations
+                title={assetDisplayName}
+                htmlUrl={reviewImageUrl}
                 annotations={playerAnnotations}
                 onAddAnnotation={handleAddAnnotation}
                 projectId={projectId}
